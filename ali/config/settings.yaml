@@ -1,0 +1,15 @@
+# ALI configuration settings
+
+runtime:
+  log_level: INFO
+  tick_seconds: 1
+
+perception:
+  audio:
+    enabled: true
+  vision:
+    enabled: true
+  input:
+    enabled: true
+  system:
+    enabled: true
