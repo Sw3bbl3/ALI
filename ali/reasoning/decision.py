@@ -24,4 +24,4 @@ class DecisionEngine:
 
     def decide(self, plan: Optional[Plan]) -> Decision:
         """Return a placeholder decision."""
-        return Decision(should_act=False, plan=plan)
+        return Decision(should_act=plan is not None, plan=plan)

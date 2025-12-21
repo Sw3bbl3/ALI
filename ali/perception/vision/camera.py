@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 
 from ali.core.event_bus import Event, EventBus
 
@@ -15,14 +17,23 @@ class CameraSensor:
 
     def __init__(self, event_bus: EventBus) -> None:
         self._event_bus = event_bus
+        self._counter = 0
+        self._logger = logging.getLogger("ali.perception.vision")
 
     async def run(self) -> None:
         """Perception loop placeholder."""
         while True:
-            await asyncio.sleep(7)
+            await asyncio.sleep(4)
+            self._counter += 1
             event = Event(
                 event_type="vision.frame",
-                payload={"status": "placeholder"},
+                payload={
+                    "sequence": self._counter,
+                    "status": "captured",
+                    "resolution": "640x480",
+                    "timestamp": time.time(),
+                },
                 source="perception.vision",
             )
+            self._logger.info("Captured frame %s", self._counter)
             await self._event_bus.publish(event)
