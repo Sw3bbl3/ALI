@@ -15,7 +15,7 @@ from ali.core.event_bus import Event, EventBus
 class SystemMetricsCollector:
     """Collects system metrics and emits telemetry events.
 
-    TODO: Integrate CPU, memory, battery, and network readings.
+    Integrates CPU, memory, disk, battery, and network readings when available.
     """
 
     def __init__(self, event_bus: EventBus) -> None:
@@ -37,6 +37,44 @@ class SystemMetricsCollector:
         with open("/proc/uptime", "r", encoding="utf-8") as handle:
             return float(handle.read().split()[0])
 
+    def _read_network(self) -> Dict[str, Dict[str, float]]:
+        stats: Dict[str, Dict[str, float]] = {}
+        try:
+            with open("/proc/net/dev", "r", encoding="utf-8") as handle:
+                for line in handle:
+                    if ":" not in line:
+                        continue
+                    iface, data = line.split(":", maxsplit=1)
+                    fields = data.split()
+                    if len(fields) < 16:
+                        continue
+                    stats[iface.strip()] = {
+                        "rx_bytes": float(fields[0]),
+                        "tx_bytes": float(fields[8]),
+                    }
+        except FileNotFoundError:
+            return {}
+        return stats
+
+    def _read_battery(self) -> Dict[str, float]:
+        power_path = "/sys/class/power_supply"
+        if not os.path.isdir(power_path):
+            return {}
+        for entry in os.listdir(power_path):
+            if not entry.startswith("BAT"):
+                continue
+            capacity_path = os.path.join(power_path, entry, "capacity")
+            status_path = os.path.join(power_path, entry, "status")
+            try:
+                with open(capacity_path, "r", encoding="utf-8") as handle:
+                    capacity = float(handle.read().strip())
+                with open(status_path, "r", encoding="utf-8") as handle:
+                    status = handle.read().strip().lower()
+            except (FileNotFoundError, ValueError):
+                continue
+            return {"capacity": capacity, "status": status}
+        return {}
+
     async def run(self) -> None:
         """Perception loop placeholder."""
         while True:
@@ -44,6 +82,8 @@ class SystemMetricsCollector:
             total_mem_mb, used_mem_mb, available_mem_mb = self._read_meminfo()
             load_1, load_5, load_15 = os.getloadavg()
             disk_total, disk_used, disk_free = shutil.disk_usage("/")
+            network = self._read_network()
+            battery = self._read_battery()
             event = Event(
                 event_type="system.metrics",
                 payload={
@@ -60,6 +100,8 @@ class SystemMetricsCollector:
                         "used": round(disk_used / 1_073_741_824, 2),
                         "free": round(disk_free / 1_073_741_824, 2),
                     },
+                    "network": network,
+                    "battery": battery,
                     "uptime_seconds": round(self._read_uptime(), 2),
                     "timestamp": time.time(),
                 },
