@@ -24,18 +24,32 @@ class SystemMetricsCollector:
 
     def _read_meminfo(self) -> Tuple[float, float, float]:
         meminfo: Dict[str, float] = {}
-        with open("/proc/meminfo", "r", encoding="utf-8") as handle:
-            for line in handle:
-                key, value = line.split(":", maxsplit=1)
-                meminfo[key.strip()] = float(value.strip().split()[0])
+        try:
+            with open("/proc/meminfo", "r", encoding="utf-8") as handle:
+                for line in handle:
+                    key, value = line.split(":", maxsplit=1)
+                    meminfo[key.strip()] = float(value.strip().split()[0])
+        except FileNotFoundError:
+            return 0.0, 0.0, 0.0
         total_kb = meminfo.get("MemTotal", 0.0)
         available_kb = meminfo.get("MemAvailable", meminfo.get("MemFree", 0.0))
         used_kb = max(total_kb - available_kb, 0.0)
         return total_kb / 1024, used_kb / 1024, available_kb / 1024
 
     def _read_uptime(self) -> float:
-        with open("/proc/uptime", "r", encoding="utf-8") as handle:
-            return float(handle.read().split()[0])
+        try:
+            with open("/proc/uptime", "r", encoding="utf-8") as handle:
+                return float(handle.read().split()[0])
+        except FileNotFoundError:
+            return 0.0
+
+    def _read_load_average(self) -> Tuple[float, float, float]:
+        if not hasattr(os, "getloadavg"):
+            return 0.0, 0.0, 0.0
+        try:
+            return os.getloadavg()
+        except OSError:
+            return 0.0, 0.0, 0.0
 
     def _read_network(self) -> Dict[str, Dict[str, float]]:
         stats: Dict[str, Dict[str, float]] = {}
@@ -80,8 +94,8 @@ class SystemMetricsCollector:
         while True:
             await asyncio.sleep(4)
             total_mem_mb, used_mem_mb, available_mem_mb = self._read_meminfo()
-            load_1, load_5, load_15 = os.getloadavg()
-            disk_total, disk_used, disk_free = shutil.disk_usage("/")
+            load_1, load_5, load_15 = self._read_load_average()
+            disk_total, disk_used, disk_free = shutil.disk_usage(os.path.abspath(os.sep))
             network = self._read_network()
             battery = self._read_battery()
             event = Event(
