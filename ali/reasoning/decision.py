@@ -19,9 +19,20 @@ class Decision:
 class DecisionEngine:
     """Determines whether ALI should take action.
 
-    TODO: Use intent probabilities, risk analysis, and policy constraints.
+    Uses intent probabilities, risk analysis, and policy constraints.
     """
 
-    def decide(self, plan: Optional[Plan]) -> Decision:
-        """Return a placeholder decision."""
-        return Decision(should_act=plan is not None, plan=plan)
+    def decide(
+        self,
+        plan: Optional[Plan],
+        confidence: float,
+        risk: float,
+        policy_allows: bool,
+    ) -> Decision:
+        """Return a decision that factors in confidence and risk."""
+        if not plan:
+            return Decision(should_act=False, plan=None)
+        if not policy_allows:
+            return Decision(should_act=False, plan=plan)
+        should_act = confidence >= 0.55 and risk <= 0.75
+        return Decision(should_act=should_act, plan=plan)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 
 from ali.core.event_bus import Event, EventBus
@@ -12,7 +13,7 @@ from ali.core.event_bus import Event, EventBus
 class CameraSensor:
     """Captures camera frames and emits vision events.
 
-    TODO: Integrate camera capture and frame pre-processing.
+    Emits lightweight frame metadata to simulate local capture.
     """
 
     def __init__(self, event_bus: EventBus) -> None:
@@ -25,12 +26,16 @@ class CameraSensor:
         while True:
             await asyncio.sleep(4)
             self._counter += 1
+            brightness = abs(math.cos(self._counter / 3.0))
+            motion_score = abs(math.sin(self._counter / 4.0))
             event = Event(
                 event_type="vision.frame",
                 payload={
                     "sequence": self._counter,
                     "status": "captured",
                     "resolution": "640x480",
+                    "brightness": round(brightness, 3),
+                    "motion_score": round(motion_score, 3),
                     "timestamp": time.time(),
                 },
                 source="perception.vision",

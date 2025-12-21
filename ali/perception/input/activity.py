@@ -12,7 +12,7 @@ from ali.core.event_bus import Event, EventBus
 class InputActivityMonitor:
     """Tracks keyboard/mouse activity and emits input events.
 
-    TODO: Hook into OS-level input events locally.
+    Emits synthetic activity states that mimic local input activity.
     """
 
     def __init__(self, event_bus: EventBus) -> None:
@@ -25,12 +25,15 @@ class InputActivityMonitor:
         while True:
             await asyncio.sleep(5)
             self._counter += 1
+            activity = "typing" if self._counter % 3 == 0 else "idle"
+            activity_score = 0.8 if activity == "typing" else 0.2
             event = Event(
                 event_type="input.activity",
                 payload={
                     "sequence": self._counter,
                     "status": "detected",
-                    "activity": "idle",
+                    "activity": activity,
+                    "activity_score": activity_score,
                     "timestamp": time.time(),
                 },
                 source="perception.input",

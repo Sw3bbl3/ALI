@@ -8,10 +8,14 @@ import logging
 class VoiceOutput:
     """Generates spoken responses.
 
-    TODO: Integrate local text-to-speech engine.
+    Provides local text output with basic filtering.
     """
+
+    def __init__(self) -> None:
+        self._logger = logging.getLogger("ali.action.voice")
 
     def speak(self, text: str) -> None:
         """Speak a text string placeholder."""
-        logger = logging.getLogger("ali.action.voice")
-        logger.info("Voice output: %s", text)
+        if not text.strip():
+            return
+        self._logger.info("Voice output: %s", text)

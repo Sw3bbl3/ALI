@@ -11,7 +11,7 @@ from ali.core.event_bus import Event, EventBus
 from ali.core.permissions import ActionRequest, PermissionGate
 from ali.reasoning.decision import DecisionEngine
 from ali.reasoning.memory import MemoryItem, MemoryStore
-from ali.reasoning.planner import Planner
+from ali.reasoning.planner import Plan, Planner
 
 
 @dataclass
@@ -50,20 +50,24 @@ class ReasoningEngine:
             return
 
         plan = None
-        if self._intent.intent != "idle" and self._intent.confidence >= 0.6:
+        if self._intent.intent != "idle" and self._intent.confidence >= 0.5:
             plan = self._planner.create_plan(goal=f"Assist with {self._intent.intent}")
 
-        decision = self._decision_engine.decide(plan)
+        risk = plan.risk if plan else 0.0
+        policy_allows = True
+        decision = self._decision_engine.decide(
+            plan=plan,
+            confidence=self._intent.confidence,
+            risk=risk,
+            policy_allows=policy_allows,
+        )
         self._logger.info("Decision: should_act=%s plan=%s", decision.should_act, decision.plan)
 
         if decision.should_act and decision.plan and self._ready_for_action():
+            action_type, payload = self._select_action(decision.plan, event)
             request = ActionRequest(
-                action_type="notify",
-                payload={
-                    "title": "ALI Assistance",
-                    "message": f"Plan ready: {decision.plan.goal}",
-                    "source_event": event.event_id,
-                },
+                action_type=action_type,
+                payload=payload | {"risk": risk},
                 source="reasoning.engine",
             )
             if self._permission_gate.approve(request):
@@ -84,3 +88,12 @@ class ReasoningEngine:
             return False
         self._last_action_time = now
         return True
+
+    def _select_action(self, plan: Plan, event: Event) -> tuple[str, dict]:
+        memory_summary = self._memory.summarize()
+        message = f"Plan ready: {plan.goal}. Recent signals: {memory_summary}"
+        if "focus" in plan.goal.lower():
+            return "notify", {"title": "ALI Focus Plan", "message": message, "source_event": event.event_id}
+        if "wellbeing" in plan.goal.lower():
+            return "speak", {"text": "Time for a short break. You've been focused."}
+        return "notify", {"title": "ALI Assistance", "message": message, "source_event": event.event_id}

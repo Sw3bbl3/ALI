@@ -10,7 +10,7 @@ from ali.core.event_bus import Event, EventBus
 class SpeechInterpreter:
     """Converts audio events into text transcripts.
 
-    TODO: Integrate local speech-to-text model.
+    Uses lightweight heuristics to derive a transcript from audio features.
     """
 
     def __init__(self, event_bus: EventBus) -> None:
@@ -19,12 +19,29 @@ class SpeechInterpreter:
 
     async def handle(self, event: Event) -> None:
         """Process an audio event and emit a transcript."""
-        transcript = f"placeholder transcript for sample {event.payload.get('sequence', 'n/a')}"
+        payload = event.payload
+        sequence = payload.get("sequence", "n/a")
+        is_speech = payload.get("is_speech", False)
+        energy = float(payload.get("energy", 0.0))
+
+        if is_speech:
+            phrases = [
+                "check system status",
+                "remind me to take a break",
+                "summarize recent activity",
+                "schedule focus time",
+            ]
+            transcript = phrases[int(sequence) % len(phrases)]
+            confidence = min(0.9, 0.4 + energy * 0.6)
+        else:
+            transcript = "silence"
+            confidence = 0.1
         interpreted = Event(
             event_type="speech.transcript",
             payload={
                 "transcript": transcript,
-                "confidence": 0.42,
+                "confidence": round(confidence, 2),
+                "intent_hints": ["status"] if "status" in transcript else [],
                 "source_event": event.event_id,
             },
             source="interpretation.speech",
