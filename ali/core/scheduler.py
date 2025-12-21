@@ -139,6 +139,8 @@ class Scheduler:
             self._ensure_task(spec)
 
     def _should_throttle(self) -> bool:
+        if not hasattr(os, "getloadavg"):
+            return False
         try:
             load = os.getloadavg()[0]
         except OSError:
