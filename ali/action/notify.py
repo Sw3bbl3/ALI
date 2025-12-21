@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 
@@ -21,5 +22,5 @@ class Notifier:
 
     def send(self, notification: Notification) -> None:
         """Send a notification placeholder."""
-        _ = notification
-        # Placeholder logic only.
+        logger = logging.getLogger("ali.action.notify")
+        logger.info("Notification: %s - %s", notification.title, notification.message)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Dict, Any
 
@@ -22,5 +23,5 @@ class OSController:
 
     def execute(self, action: OSAction) -> None:
         """Execute an OS action placeholder."""
-        _ = action
-        # Placeholder logic only.
+        logger = logging.getLogger("ali.action.os")
+        logger.info("OS action requested: %s payload=%s", action.name, action.payload)

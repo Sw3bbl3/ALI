@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 
 class VoiceOutput:
     """Generates spoken responses.
@@ -11,5 +13,5 @@ class VoiceOutput:
 
     def speak(self, text: str) -> None:
         """Speak a text string placeholder."""
-        _ = text
-        # Placeholder logic only.
+        logger = logging.getLogger("ali.action.voice")
+        logger.info("Voice output: %s", text)
