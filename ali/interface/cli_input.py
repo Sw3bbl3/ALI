@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import Any, Dict, Iterable
 
 from ali.core.event_bus import Event, EventBus
@@ -45,6 +46,8 @@ class CliInputMonitor:
         self._permission_gate = permission_gate
         self._logger = logging.getLogger("ali.interface.cli")
         self._model = GemmaLocalModel()
+        self._enable_tool_calls = os.getenv("ALI_ENABLE_TOOL_CALLS", "").lower() in {"1", "true", "yes"}
+        self._show_tool_calls = os.getenv("ALI_SHOW_TOOL_CALLS", "").lower() in {"1", "true", "yes"}
 
     async def run(self) -> None:
         """Continuously read CLI input and publish events."""
@@ -63,9 +66,14 @@ class CliInputMonitor:
             await self._publish_transcript(message)
             response = self._generate_response(message)
             if response:
-                cleaned_response = self._clean_response(response)
-                print(f"ALI> {cleaned_response}")
-                await self._handle_tool_calls(cleaned_response)
+                content, tool_lines = self._split_response(response)
+                if content:
+                    print(f"ALI> {content}")
+                if tool_lines and self._show_tool_calls:
+                    for line in tool_lines:
+                        print(f"ALI(tool)> {line}")
+                if tool_lines and self._enable_tool_calls:
+                    await self._handle_tool_calls(tool_lines)
 
     async def _read_input(self) -> str | None:
         try:
@@ -102,13 +110,12 @@ class CliInputMonitor:
             return None
 
     @staticmethod
-    def _clean_response(response: str) -> str:
+    def _split_response(response: str) -> tuple[str, list[str]]:
         lines = [line.rstrip() for line in response.splitlines()]
         tool_lines = [line for line in lines if line.strip().startswith("TOOL:")]
         content_lines = [line.strip() for line in lines if line.strip() and line not in tool_lines]
         primary = content_lines[0] if content_lines else ""
-        cleaned = [line for line in [primary, *tool_lines] if line]
-        return "\n".join(cleaned)
+        return primary, tool_lines
 
     @staticmethod
     def _intent_hints(message: str) -> list[str]:
@@ -132,10 +139,8 @@ class CliInputMonitor:
             lines.append(f"- {event.event_type} from {event.source}: {payload_preview}")
         return "\n".join(lines) if lines else "none"
 
-    async def _handle_tool_calls(self, response: str) -> None:
-        for line in response.splitlines():
-            if not line.strip().startswith("TOOL:"):
-                continue
+    async def _handle_tool_calls(self, tool_lines: Iterable[str]) -> None:
+        for line in tool_lines:
             tool_name, payload = self._parse_tool_call(line)
             if not tool_name:
                 continue

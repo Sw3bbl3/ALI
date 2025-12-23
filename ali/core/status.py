@@ -60,7 +60,7 @@ class StatusReporter:
         while True:
             await asyncio.sleep(self._interval_seconds)
             snapshot = self._snapshot()
-            self._logger.info(
+            self._logger.debug(
                 "Status | uptime=%.1fs events=%s sources=%s",
                 snapshot.uptime_seconds,
                 snapshot.events_by_type,

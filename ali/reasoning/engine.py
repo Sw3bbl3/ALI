@@ -101,9 +101,15 @@ class ReasoningEngine:
             transcript=event.payload.get("transcript", ""),
             context_tags=event.payload.get("context_tags", []),
         )
+        if context.transcript:
+            speech = self._text_generator.speech(context)
+            return "speak", {"text": speech, "source_event": event.event_id}
+
         message = self._text_generator.notification(context)
         if "focus" in plan.goal.lower():
             return "notify", {"title": "ALI Focus Plan", "message": message, "source_event": event.event_id}
         if "wellbeing" in plan.goal.lower():
-            return "speak", {"text": self._text_generator.speech(context)}
+            return "notify", {"title": "ALI Wellbeing", "message": message, "source_event": event.event_id}
+        if "summary" in plan.goal.lower():
+            return "notify", {"title": "ALI Summary", "message": message, "source_event": event.event_id}
         return "notify", {"title": "ALI Assistance", "message": message, "source_event": event.event_id}

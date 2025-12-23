@@ -32,7 +32,10 @@ class SystemMetricsCollector:
         except FileNotFoundError:
             return 0.0, 0.0, 0.0
         total_kb = meminfo.get("MemTotal", 0.0)
-        available_kb = meminfo.get("MemAvailable", meminfo.get("MemFree", 0.0))
+        if "MemAvailable" in meminfo:
+            available_kb = meminfo["MemAvailable"]
+        else:
+            available_kb = meminfo.get("MemFree", 0.0) + meminfo.get("Buffers", 0.0) + meminfo.get("Cached", 0.0)
         used_kb = max(total_kb - available_kb, 0.0)
         return total_kb / 1024, used_kb / 1024, available_kb / 1024
 
@@ -121,5 +124,5 @@ class SystemMetricsCollector:
                 },
                 source="perception.system",
             )
-            self._logger.info("Collected system metrics")
+            self._logger.debug("Collected system metrics")
             await self._event_bus.publish(event)

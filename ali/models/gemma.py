@@ -21,13 +21,19 @@ class GemmaConfig:
     model_id: str = "google/gemma-3-270m"
     cache_dir: Path = Path("ali/models/cache")
     device: Optional[str] = None
+    model_path: Optional[Path] = None
 
 
 class GemmaLocalModel:
     """Lazy-loading wrapper around a local Gemma model."""
 
+    _MODEL_CACHE: dict[str, tuple[object, object, str]] = {}
+
     def __init__(self, config: Optional[GemmaConfig] = None) -> None:
         self._config = config or self._config_from_env()
+        self._config.cache_dir = self._config.cache_dir.expanduser().resolve()
+        if self._config.model_path:
+            self._config.model_path = self._config.model_path.expanduser().resolve()
         self._model = None
         self._tokenizer = None
         self._device = self._config.device
@@ -81,27 +87,54 @@ class GemmaLocalModel:
         cache_dir = self._config.cache_dir
         cache_dir.mkdir(parents=True, exist_ok=True)
         self._device = self._device or ("cuda" if torch.cuda.is_available() else "cpu")
+        cache_key = self._cache_key()
+        cached = self._MODEL_CACHE.get(cache_key)
+        if cached:
+            self._model, self._tokenizer, self._device = cached
+            return
         dtype = torch.float16 if self._device == "cuda" else torch.float32
 
-        logger.info("Loading Gemma model %s on %s", self._config.model_id, self._device)
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            self._config.model_id,
-            cache_dir=str(cache_dir),
-        )
-        self._model = AutoModelForCausalLM.from_pretrained(
-            self._config.model_id,
-            cache_dir=str(cache_dir),
-            torch_dtype=dtype,
-        )
+        model_source = self._config.model_path or self._config.model_id
+        logger.info("Loading Gemma model %s on %s", model_source, self._device)
+        if isinstance(model_source, Path):
+            model_source = model_source.resolve()
+            if not model_source.exists():
+                raise RuntimeError(f"Local model path not found: {model_source}")
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                str(model_source),
+                local_files_only=True,
+            )
+            self._model = AutoModelForCausalLM.from_pretrained(
+                str(model_source),
+                local_files_only=True,
+                torch_dtype=dtype,
+            )
+        else:
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                model_source,
+                cache_dir=str(cache_dir),
+            )
+            self._model = AutoModelForCausalLM.from_pretrained(
+                model_source,
+                cache_dir=str(cache_dir),
+                torch_dtype=dtype,
+            )
         self._model.to(self._device)
         self._model.eval()
+        self._MODEL_CACHE[cache_key] = (self._model, self._tokenizer, self._device)
 
     @staticmethod
     def _config_from_env() -> GemmaConfig:
         model_id = os.getenv("ALI_GEMMA_MODEL_ID", "google/gemma-3-270m")
-        cache_dir = Path(os.getenv("ALI_MODEL_CACHE", "ali/models/cache"))
+        cache_dir = Path(os.getenv("ALI_MODEL_CACHE", "ali/models/cache")).expanduser().resolve()
         device = os.getenv("ALI_MODEL_DEVICE")
-        return GemmaConfig(model_id=model_id, cache_dir=cache_dir, device=device)
+        model_path_env = os.getenv("ALI_MODEL_PATH")
+        model_path = Path(model_path_env).expanduser().resolve() if model_path_env else None
+        return GemmaConfig(model_id=model_id, cache_dir=cache_dir, device=device, model_path=model_path)
+
+    def _cache_key(self) -> str:
+        model_identifier = self._config.model_path or self._config.model_id
+        return f"{model_identifier}|{self._config.cache_dir}|{self._device}"
 
 
 def ensure_gemma_model_cached(
@@ -139,6 +172,7 @@ def ensure_gemma_model_cached(
             local_dir_use_symlinks=False,
             resume_download=not force,
         )
+        os.environ.setdefault("ALI_MODEL_PATH", str(local_dir.resolve()))
     except HfHubHTTPError as exc:
         if getattr(exc.response, "status_code", None) in {401, 403}:
             logger.warning(
