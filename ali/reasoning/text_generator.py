@@ -92,7 +92,7 @@ class TextGenerator:
         candidate = ""
         for line in lines:
             lowered = line.lower()
-            if lowered.startswith(("notification:", "spoken reminder:")):
+            if lowered.startswith(("notification:", "spoken reminder:", "response:", "assistant:")):
                 candidate = line.split(":", 1)[1].strip()
                 if candidate:
                     break
@@ -124,8 +124,8 @@ class TextGenerator:
             return "I'm here if you need anything."
         if context.transcript:
             snippet = TextGenerator._shorten_transcript(context.transcript, max_words=6)
-            return f"I heard \"{snippet}\"—want help with {intent_phrase}?"
-        return f"I'm here to help with {intent_phrase}."
+            return f"Got it: \"{snippet}.\" What would you like me to do?"
+        return f"I'm here to help with {intent_phrase}. What should we tackle first?"
 
     @staticmethod
     def _intent_phrase(context: TextContext) -> str:
@@ -163,10 +163,13 @@ class TextGenerator:
     def _speech_prompt(context: TextContext) -> str:
         return (
             "You are ALI, speaking aloud in a calm tone. "
-            "Give a short (max 30 words) spoken reminder.\n"
+            "Respond directly to the user's latest message in one short reply (max 30 words). "
+            "Ask one clarifying question if needed.\n"
             f"Goal: {context.goal}\n"
             f"Intent: {context.intent}\n"
             f"Emotion: {context.emotion}\n"
+            f"Transcript: {context.transcript}\n"
             f"Context tags: {', '.join(context.context_tags) or 'none'}\n"
-            "Spoken reminder:"
+            f"Recent signals: {context.memory_summary}\n"
+            "Response:"
         )
