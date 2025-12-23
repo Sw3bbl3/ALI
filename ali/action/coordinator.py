@@ -32,8 +32,18 @@ class ActionCoordinator:
 
         if action_type == "notify":
             self._notifier.send(Notification(title=payload.get("title", "ALI"), message=payload.get("message", "")))
+            await self._emit_response(
+                event,
+                {
+                    "response_type": "notify",
+                    "title": payload.get("title", "ALI"),
+                    "message": payload.get("message", ""),
+                },
+            )
         elif action_type == "speak":
-            self._voice.speak(payload.get("text", ""))
+            text = payload.get("text", "")
+            self._voice.speak(text)
+            await self._emit_response(event, {"response_type": "speak", "text": text})
         elif action_type == "os":
             self._os_controller.execute(OSAction(name=payload.get("name", ""), payload=payload))
 
@@ -43,3 +53,14 @@ class ActionCoordinator:
             source="action.coordinator",
         )
         await self._event_bus.publish(completed)
+
+    async def _emit_response(self, source_event: Event, payload: Dict[str, Any]) -> None:
+        if not payload:
+            return
+        await self._event_bus.publish(
+            Event(
+                event_type="ali.response",
+                payload=payload | {"source_event": source_event.event_id},
+                source="action.coordinator",
+            )
+        )
