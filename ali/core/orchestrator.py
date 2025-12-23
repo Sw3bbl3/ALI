@@ -18,9 +18,7 @@ from ali.interpretation.context import ContextTagger
 from ali.interpretation.emotion import EmotionDetector
 from ali.interpretation.intent import IntentClassifier
 from ali.interpretation.speech import SpeechInterpreter
-from ali.perception.audio.listener import AudioListener
-from ali.perception.vision.camera import CameraSensor
-from ali.perception.input.activity import InputActivityMonitor
+from ali.interface.cli_input import CliInputMonitor
 from ali.perception.system.metrics import SystemMetricsCollector
 from ali.reasoning.engine import ReasoningEngine
 
@@ -51,9 +49,7 @@ class Orchestrator:
             if name.strip()
         }
         module_factories = {
-            "audio": lambda: AudioListener(self.event_bus),
-            "vision": lambda: CameraSensor(self.event_bus),
-            "input": lambda: InputActivityMonitor(self.event_bus),
+            "cli": lambda: CliInputMonitor(self.event_bus, self.permissions),
             "system": lambda: SystemMetricsCollector(self.event_bus),
         }
         self._modules = [factory() for name, factory in module_factories.items() if name not in disabled]
