@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 
 from ali.core.event_bus import Event, EventBus
+from ali.core.priority_queue import PrioritizedQueue
 
 
 class IntentClassifier:
@@ -66,8 +68,26 @@ class IntentClassifier:
         self._last_transcript: str = ""
         self._last_transcript_time: float = 0.0
         self._recent_transcript_window = 60.0
+        tick_ms = float(os.getenv("ALI_INTENT_TICK_MS", "1"))
+        self._queue = PrioritizedQueue(
+            self._process_event,
+            self._is_user_input,
+            maxsize=250,
+            max_batch=6,
+            tick_seconds=max(tick_ms / 1000.0, 0.0005),
+            name="ali.interpretation.intent.queue",
+        )
 
     async def handle(self, event: Event) -> None:
+        """Queue events for millisecond-priority intent processing."""
+        if not self._queue.enqueue(event):
+            self._logger.warning("Intent event dropped due to queue backpressure")
+
+    async def run(self) -> None:
+        """Run the intent processing loop on a tight tick."""
+        await self._queue.run()
+
+    async def _process_event(self, event: Event) -> None:
         """Process an event and update intent state."""
         if event.event_type == "context.tagged":
             self._context_tags = set(event.payload.get("tags", []))
@@ -108,6 +128,12 @@ class IntentClassifier:
         )
         self._logger.info("Intent updated to '%s' (%.2f)", intent, confidence)
         await self._event_bus.publish(interpreted)
+
+    @staticmethod
+    def _is_user_input(event: Event) -> bool:
+        if event.event_type == "speech.transcript":
+            return True
+        return event.source in {"cli.input", "web_ui.input"}
 
     def _intent_from_transcript(self, transcript: str, raw_confidence: float) -> tuple[str, float]:
         transcript = transcript.strip().lower()
