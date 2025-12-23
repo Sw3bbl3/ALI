@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import getpass
+import importlib.util
 import logging
 import os
+import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -62,13 +65,15 @@ class GemmaLocalModel:
         if self._model and self._tokenizer:
             return
 
-        try:
-            import torch
-            from transformers import AutoModelForCausalLM, AutoTokenizer
-        except ImportError as exc:
+        if importlib.util.find_spec("torch") is None or importlib.util.find_spec(
+            "transformers"
+        ) is None:
             raise RuntimeError(
                 "Missing dependencies for Gemma. Install requirements.txt before loading the model."
-            ) from exc
+            )
+
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
         cache_dir = self._config.cache_dir
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -103,19 +108,26 @@ def ensure_gemma_model_cached(
     force: bool = False,
 ) -> bool:
     """Download the Gemma model snapshot if it is not cached yet."""
-    try:
-        from huggingface_hub import snapshot_download
-    except ImportError:
+    if importlib.util.find_spec("huggingface_hub") is None:
         logger.warning(
             "huggingface_hub is not installed; skipping Gemma model download."
         )
         return False
+
+    from huggingface_hub import HfFolder, HfApi, login, snapshot_download
+    from huggingface_hub.utils import HfHubHTTPError
 
     config = GemmaLocalModel._config_from_env()
     resolved_model_id = model_id or config.model_id
     resolved_cache_dir = cache_dir or config.cache_dir
     resolved_cache_dir.mkdir(parents=True, exist_ok=True)
     local_dir = resolved_cache_dir / resolved_model_id.replace("/", "__")
+
+    if not _ensure_huggingface_login(
+        resolved_model_id, hf_folder=HfFolder, hf_api=HfApi, login_func=login
+    ):
+        return False
+
     try:
         snapshot_download(
             repo_id=resolved_model_id,
@@ -124,7 +136,57 @@ def ensure_gemma_model_cached(
             local_dir_use_symlinks=False,
             resume_download=not force,
         )
+    except HfHubHTTPError as exc:
+        if getattr(exc.response, "status_code", None) in {401, 403}:
+            logger.warning(
+                "Hugging Face authentication required to access %s.",
+                resolved_model_id,
+            )
+            if _ensure_huggingface_login(
+                resolved_model_id, hf_folder=HfFolder, hf_api=HfApi, login_func=login
+            ):
+                return ensure_gemma_model_cached(
+                    model_id=resolved_model_id, cache_dir=resolved_cache_dir, force=force
+                )
+        logger.warning("Unable to download Gemma model %s: %s", resolved_model_id, exc)
+        return False
     except Exception as exc:
         logger.warning("Unable to download Gemma model %s: %s", resolved_model_id, exc)
         return False
     return True
+
+
+def _ensure_huggingface_login(
+    model_id: str,
+    *,
+    hf_folder: type,
+    hf_api: type,
+    login_func: type,
+) -> bool:
+    token = hf_folder.get_token()
+    if token:
+        return True
+
+    logger.warning(
+        "No Hugging Face token found. Please sign in to access %s.", model_id
+    )
+    _open_huggingface_login(model_id)
+    token = getpass.getpass("Enter your Hugging Face token (leave blank to skip): ")
+    if not token.strip():
+        logger.warning("Skipping Hugging Face login; model download will be skipped.")
+        return False
+
+    login_func(token=token.strip(), add_to_git_credential=True)
+    try:
+        hf_api().whoami(token=token.strip())
+    except Exception:
+        logger.warning("Hugging Face login failed; please verify your token.")
+        return False
+    return True
+
+
+def _open_huggingface_login(model_id: str) -> None:
+    login_url = "https://huggingface.co/login"
+    model_url = f"https://huggingface.co/{model_id}"
+    webbrowser.open(login_url)
+    webbrowser.open(model_url)
