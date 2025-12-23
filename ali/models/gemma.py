@@ -123,6 +123,15 @@ class GemmaLocalModel:
         self._model.eval()
         self._MODEL_CACHE[cache_key] = (self._model, self._tokenizer, self._device)
 
+    def warm(self) -> bool:
+        """Warm the model by loading weights into memory."""
+        try:
+            self._load()
+        except Exception as exc:  # noqa: BLE001 - allow soft failures during warmup
+            logger.warning("Unable to warm Gemma model: %s", exc)
+            return False
+        return True
+
     @staticmethod
     def _config_from_env() -> GemmaConfig:
         model_id = os.getenv("ALI_GEMMA_MODEL_ID", "google/gemma-3-270m")
