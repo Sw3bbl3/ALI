@@ -19,6 +19,7 @@ from ali.interpretation.emotion import EmotionDetector
 from ali.interpretation.intent import IntentClassifier
 from ali.interpretation.speech import SpeechInterpreter
 from ali.interface.cli_input import CliInputMonitor
+from ali.interface.web_ui import WebUiServer
 from ali.perception.system.metrics import SystemMetricsCollector
 from ali.reasoning.engine import ReasoningEngine
 
@@ -48,10 +49,13 @@ class Orchestrator:
             for name in os.getenv("ALI_DISABLE_MODULES", "").split(",")
             if name.strip()
         }
+        enable_web_ui = os.getenv("ALI_WEB_UI", "true").lower() in {"1", "true", "yes"}
         module_factories = {
             "cli": lambda: CliInputMonitor(self.event_bus, self.permissions),
             "system": lambda: SystemMetricsCollector(self.event_bus),
         }
+        if enable_web_ui:
+            module_factories["web_ui"] = lambda: WebUiServer(self.event_bus)
         self._modules = [factory() for name, factory in module_factories.items() if name not in disabled]
 
     async def _register_handlers(self) -> None:
