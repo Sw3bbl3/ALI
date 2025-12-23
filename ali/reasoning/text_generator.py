@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from dataclasses import dataclass
@@ -56,10 +57,30 @@ class TextGenerator:
                     return cleaned
         return self._fallback_notification(context)
 
+    async def notification_async(self, context: TextContext) -> str:
+        """Craft a notification message without blocking the event loop."""
+        if self._use_model:
+            generated = await self._generate_async(self._prompt(context))
+            if generated:
+                cleaned = self._clean_generation(generated, max_words=40)
+                if cleaned:
+                    return cleaned
+        return self._fallback_notification(context)
+
     def speech(self, context: TextContext) -> str:
         """Craft a spoken message."""
         if self._use_model:
             generated = self._generate(self._speech_prompt(context))
+            if generated:
+                cleaned = self._clean_generation(generated, max_words=30)
+                if cleaned:
+                    return cleaned
+        return self._fallback_speech(context)
+
+    async def speech_async(self, context: TextContext) -> str:
+        """Craft a spoken message without blocking the event loop."""
+        if self._use_model:
+            generated = await self._generate_async(self._speech_prompt(context))
             if generated:
                 cleaned = self._clean_generation(generated, max_words=30)
                 if cleaned:
@@ -71,6 +92,20 @@ class TextGenerator:
             if not self._model:
                 self._model = GemmaLocalModel()
             return self._model.generate(prompt, max_new_tokens=80, temperature=0.6)
+        except Exception as exc:  # noqa: BLE001 - provide fallback
+            logger.warning("Text model unavailable: %s", exc)
+            return None
+
+    async def _generate_async(self, prompt: str) -> str | None:
+        try:
+            if not self._model:
+                self._model = GemmaLocalModel()
+            return await asyncio.to_thread(
+                self._model.generate,
+                prompt,
+                max_new_tokens=80,
+                temperature=0.6,
+            )
         except Exception as exc:  # noqa: BLE001 - provide fallback
             logger.warning("Text model unavailable: %s", exc)
             return None
