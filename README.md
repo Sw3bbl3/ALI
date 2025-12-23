@@ -104,11 +104,33 @@ modules can be plugged in later.
 ## Getting Started
 
 1. Create a virtual environment (optional).
-2. Install dependencies (currently none required).
+2. Install dependencies and download the default local model:
+
+```bash
+python scripts/install_ali.py
+```
+
 3. Run the system:
 
 ```bash
 python main.py
+```
+
+### Gemma 3 270M (default local text model)
+
+ALI uses `google/gemma-3-270m` as the default small local model for text reasoning and
+notifications. You can override it with:
+
+```bash
+export ALI_GEMMA_MODEL_ID=google/gemma-3-270m
+export ALI_MODEL_CACHE=ali/models/cache
+export ALI_MODEL_DEVICE=cpu  # or cuda
+```
+
+To re-download or change the model:
+
+```bash
+python scripts/install_ali.py --model-id google/gemma-3-270m --force
 ```
 
 ## Roadmap (High-Level)

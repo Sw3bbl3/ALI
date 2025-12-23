@@ -12,6 +12,7 @@ from ali.core.permissions import ActionRequest, PermissionGate
 from ali.reasoning.decision import DecisionEngine
 from ali.reasoning.memory import MemoryItem, MemoryStore
 from ali.reasoning.planner import Plan, Planner
+from ali.reasoning.text_generator import TextContext, TextGenerator
 
 
 @dataclass
@@ -35,6 +36,7 @@ class ReasoningEngine:
         self._last_action_time = 0.0
         self._cooldown_seconds = 30.0
         self._logger = logging.getLogger("ali.reasoning")
+        self._text_generator = TextGenerator()
 
     async def handle(self, event: Event) -> None:
         """Handle interpreted events and decide on actions."""
@@ -91,9 +93,17 @@ class ReasoningEngine:
 
     def _select_action(self, plan: Plan, event: Event) -> tuple[str, dict]:
         memory_summary = self._memory.summarize()
-        message = f"Plan ready: {plan.goal}. Recent signals: {memory_summary}"
+        context = TextContext(
+            goal=plan.goal,
+            memory_summary=memory_summary,
+            intent=self._intent.intent if self._intent else "idle",
+            emotion=event.payload.get("emotion", "neutral"),
+            transcript=event.payload.get("transcript", ""),
+            context_tags=event.payload.get("context_tags", []),
+        )
+        message = self._text_generator.notification(context)
         if "focus" in plan.goal.lower():
             return "notify", {"title": "ALI Focus Plan", "message": message, "source_event": event.event_id}
         if "wellbeing" in plan.goal.lower():
-            return "speak", {"text": "Time for a short break. You've been focused."}
+            return "speak", {"text": self._text_generator.speech(context)}
         return "notify", {"title": "ALI Assistance", "message": message, "source_event": event.event_id}
