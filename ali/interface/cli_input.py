@@ -9,6 +9,7 @@ import os
 from typing import Any, Dict, Iterable
 
 from ali.core.event_bus import Event, EventBus
+from ali.core.input_queue import InputQueue
 from ali.core.permissions import ActionRequest, PermissionGate
 from ali.models.gemma import GemmaLocalModel
 
@@ -48,27 +49,38 @@ class CliInputMonitor:
         self._model = GemmaLocalModel()
         self._enable_tool_calls = os.getenv("ALI_ENABLE_TOOL_CALLS", "").lower() in {"1", "true", "yes"}
         self._show_tool_calls = os.getenv("ALI_SHOW_TOOL_CALLS", "").lower() in {"1", "true", "yes"}
-        self._response_tasks: set[asyncio.Task] = set()
         self._output_lock = asyncio.Lock()
+        self._input_queue = InputQueue(
+            self._handle_message,
+            maxsize=50,
+            max_batch=1,
+            name="ali.interface.cli.queue",
+        )
 
     async def run(self) -> None:
         """Continuously read CLI input and publish events."""
         self._logger.info("CLI ready. Type your message (or 'exit' to quit).")
-        while True:
-            message = await self._read_input()
-            if message is None:
-                return
-            message = message.strip()
-            if not message:
-                continue
-            if message.lower() in {"exit", "quit"}:
-                self._logger.info("CLI exiting.")
-                return
+        self._input_queue.start()
+        try:
+            while True:
+                message = await self._read_input()
+                if message is None:
+                    return
+                message = message.strip()
+                if not message:
+                    continue
+                if message.lower() in {"exit", "quit"}:
+                    self._logger.info("CLI exiting.")
+                    return
 
-            await self._publish_transcript(message)
-            task = asyncio.create_task(self._respond_to_message(message))
-            self._response_tasks.add(task)
-            task.add_done_callback(self._response_tasks.discard)
+                if not self._input_queue.enqueue(message):
+                    self._logger.warning("Input dropped due to queue backpressure")
+        finally:
+            await self._input_queue.stop()
+
+    async def _handle_message(self, message: str) -> None:
+        await self._publish_transcript(message)
+        await self._respond_to_message(message)
 
     async def _read_input(self) -> str | None:
         try:

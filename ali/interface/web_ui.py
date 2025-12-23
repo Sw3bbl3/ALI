@@ -9,6 +9,7 @@ import os
 from typing import Any, Dict
 
 from ali.core.event_bus import Event, EventBus
+from ali.core.input_queue import InputQueue
 
 HTML_PAGE = """<!doctype html>
 <html lang="en">
@@ -262,6 +263,12 @@ class WebUiServer:
         self._server: asyncio.AbstractServer | None = None
         self._subscribers: set[asyncio.Queue[Dict[str, Any]]] = set()
         self._ui_event_types = {"intent.updated", "ali.response"}
+        self._input_queue = InputQueue(
+            self._publish_message,
+            maxsize=100,
+            max_batch=4,
+            name="ali.interface.web.queue",
+        )
 
     async def run(self) -> None:
         """Start the web UI server and keep it running."""
@@ -271,8 +278,12 @@ class WebUiServer:
         url_host = "127.0.0.1" if self._host == "0.0.0.0" else self._host
         self._logger.info("Web UI listening on %s", sockets)
         self._logger.info("Open http://%s:%s in your browser", url_host, self._port)
-        async with self._server:
-            await self._server.serve_forever()
+        self._input_queue.start()
+        try:
+            async with self._server:
+                await self._server.serve_forever()
+        finally:
+            await self._input_queue.stop()
 
     async def _start_server(self) -> None:
         if self._port == 0:
@@ -351,21 +362,26 @@ class WebUiServer:
         try:
             payload = json.loads(body.decode())
             message = payload.get("message", "")
-            await self._event_bus.publish(
-                Event(
-                    event_type="speech.transcript",
-                    payload={
-                        "transcript": message,
-                        "confidence": 0.9,
-                        "intent_hints": [],
-                        "source_event": "web_ui.input",
-                    },
-                    source="web_ui.input",
-                )
-            )
+            if not self._input_queue.enqueue(message):
+                await self._send_response(writer, 429, "application/json", b"{\"ok\": false}")
+                return
             await self._send_response(writer, 200, "application/json", b"{\"ok\": true}")
         except json.JSONDecodeError:
             await self._send_response(writer, 400, "application/json", b"{\"ok\": false}")
+
+    async def _publish_message(self, message: str) -> None:
+        await self._event_bus.publish(
+            Event(
+                event_type="speech.transcript",
+                payload={
+                    "transcript": message,
+                    "confidence": 0.9,
+                    "intent_hints": [],
+                    "source_event": "web_ui.input",
+                },
+                source="web_ui.input",
+            )
+        )
 
     async def _stream_events(self, writer: asyncio.StreamWriter) -> None:
         headers = (
@@ -393,6 +409,8 @@ class WebUiServer:
         reason = "OK" if status == 200 else "Not Found"
         if status == 400:
             reason = "Bad Request"
+        if status == 429:
+            reason = "Too Many Requests"
         header = (
             f"HTTP/1.1 {status} {reason}\r\n"
             f"Content-Type: {mime}\r\n"
