@@ -65,6 +65,9 @@ class GemmaLocalModel:
         if self._model and self._tokenizer:
             return
 
+        os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+        os.environ.setdefault("TRANSFORMERS_NO_FLAX", "1")
+
         if importlib.util.find_spec("torch") is None or importlib.util.find_spec(
             "transformers"
         ) is None:
