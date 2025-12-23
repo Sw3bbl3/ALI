@@ -241,19 +241,48 @@ class WebUiServer:
     def __init__(self, event_bus: EventBus) -> None:
         self._event_bus = event_bus
         self._logger = logging.getLogger("ali.interface.web")
-        self._host = os.getenv("ALI_WEB_UI_HOST", "0.0.0.0")
-        self._port = int(os.getenv("ALI_WEB_UI_PORT", "8080"))
+        self._host = os.getenv("ALI_WEB_UI_HOST", "127.0.0.1")
+        port_setting = os.getenv("ALI_WEB_UI_PORT")
+        self._port_is_fixed = False
+        if port_setting is None:
+            self._port = 8080
+        elif port_setting.lower() in {"auto", "0"}:
+            self._port = 0
+        else:
+            self._port = int(port_setting)
+            self._port_is_fixed = True
         self._server: asyncio.AbstractServer | None = None
         self._subscribers: set[asyncio.Queue[Dict[str, Any]]] = set()
 
     async def run(self) -> None:
         """Start the web UI server and keep it running."""
         await self._event_bus.subscribe("*", self._handle_event)
-        self._server = await asyncio.start_server(self._handle_connection, self._host, self._port)
+        await self._start_server()
         sockets = ", ".join(str(sock.getsockname()) for sock in self._server.sockets or [])
+        url_host = "127.0.0.1" if self._host == "0.0.0.0" else self._host
         self._logger.info("Web UI listening on %s", sockets)
+        self._logger.info("Open http://%s:%s in your browser", url_host, self._port)
         async with self._server:
             await self._server.serve_forever()
+
+    async def _start_server(self) -> None:
+        if self._port == 0:
+            self._server = await asyncio.start_server(self._handle_connection, self._host, 0)
+            self._port = (self._server.sockets or [])[0].getsockname()[1]
+            return
+        ports = [self._port]
+        if not self._port_is_fixed:
+            ports.extend(range(self._port + 1, self._port + 11))
+        last_error: Exception | None = None
+        for port in ports:
+            try:
+                self._server = await asyncio.start_server(self._handle_connection, self._host, port)
+                self._port = port
+                return
+            except OSError as exc:
+                last_error = exc
+        if last_error:
+            raise last_error
 
     async def _handle_event(self, event: Event) -> None:
         payload = {
