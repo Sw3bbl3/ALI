@@ -39,10 +39,7 @@ class TextGenerator:
                 cleaned = self._clean_generation(generated, max_words=40)
                 if cleaned:
                     return cleaned
-        return (
-            f"{context.goal}. Recent signals: {context.memory_summary}. "
-            f"Intent={context.intent}, emotion={context.emotion}."
-        )
+        return self._fallback_notification(context)
 
     def speech(self, context: TextContext) -> str:
         """Craft a spoken message."""
@@ -52,7 +49,7 @@ class TextGenerator:
                 cleaned = self._clean_generation(generated, max_words=30)
                 if cleaned:
                     return cleaned
-        return f"A gentle reminder from ALI about {context.intent}."
+        return self._fallback_speech(context)
 
     def _generate(self, prompt: str) -> str | None:
         try:
@@ -68,13 +65,70 @@ class TextGenerator:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if not lines:
             return ""
-        candidate = lines[0]
-        if candidate.lower().startswith("notification:"):
-            candidate = candidate.split(":", 1)[1].strip()
+        prompt_prefixes = (
+            "you are ali",
+            "goal:",
+            "intent:",
+            "emotion:",
+            "transcript:",
+            "context tags:",
+            "recent signals:",
+        )
+        candidate = ""
+        for line in lines:
+            lowered = line.lower()
+            if lowered.startswith(("notification:", "spoken reminder:")):
+                candidate = line.split(":", 1)[1].strip()
+                if candidate:
+                    break
+                continue
+            if any(lowered.startswith(prefix) for prefix in prompt_prefixes):
+                continue
+            candidate = line
+            break
+        if not candidate:
+            return ""
         words = candidate.split()
         if len(words) > max_words:
             candidate = " ".join(words[:max_words]).rstrip(".,;:") + "..."
         return candidate
+
+    @staticmethod
+    def _fallback_notification(context: TextContext) -> str:
+        intent_phrase = TextGenerator._intent_phrase(context)
+        if context.intent == "idle":
+            return "I'm standing by if you need anything."
+        if context.emotion and context.emotion != "neutral":
+            return f"I can help with {intent_phrase}, and I hear you're feeling {context.emotion}."
+        return f"I can help with {intent_phrase} whenever you're ready."
+
+    @staticmethod
+    def _fallback_speech(context: TextContext) -> str:
+        intent_phrase = TextGenerator._intent_phrase(context)
+        if context.intent == "idle":
+            return "I'm here if you need anything."
+        if context.transcript:
+            snippet = TextGenerator._shorten_transcript(context.transcript, max_words=6)
+            return f"I heard \"{snippet}\"—want help with {intent_phrase}?"
+        return f"I'm here to help with {intent_phrase}."
+
+    @staticmethod
+    def _intent_phrase(context: TextContext) -> str:
+        intent = context.intent.strip().replace("_", " ") if context.intent else ""
+        if not intent or intent == "idle":
+            return "anything"
+        if context.goal.lower().startswith("assist with "):
+            goal_phrase = context.goal[12:].strip()
+            if goal_phrase:
+                intent = goal_phrase
+        return intent
+
+    @staticmethod
+    def _shorten_transcript(transcript: str, *, max_words: int) -> str:
+        words = transcript.strip().split()
+        if len(words) <= max_words:
+            return transcript.strip()
+        return " ".join(words[:max_words]).rstrip(".,;:") + "..."
 
     @staticmethod
     def _prompt(context: TextContext) -> str:
