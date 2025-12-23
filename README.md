@@ -116,6 +116,23 @@ python scripts/install_ali.py
 python main.py
 ```
 
+### Web UI
+
+The web UI runs locally and binds to `127.0.0.1` by default. After starting `main.py`, open:
+
+```
+http://127.0.0.1:8080
+```
+
+If the port is busy, ALI will automatically try the next 10 ports (8081-8090). You can control the
+binding with environment variables:
+
+```bash
+export ALI_WEB_UI_HOST=127.0.0.1   # default
+export ALI_WEB_UI_PORT=8080        # fixed port
+export ALI_WEB_UI_PORT=auto        # ask the OS for an open port
+```
+
 ### Gemma 3 270M (default local text model)
 
 ALI uses `google/gemma-3-270m` as the default small local model for text reasoning and
