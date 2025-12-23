@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 
 from ali.core.event_bus import Event, EventBus
 
@@ -63,6 +64,8 @@ class IntentClassifier:
         self._context_tags: set[str] = set()
         self._last_emotion: str = "neutral"
         self._last_transcript: str = ""
+        self._last_transcript_time: float = 0.0
+        self._recent_transcript_window = 60.0
 
     async def handle(self, event: Event) -> None:
         """Process an event and update intent state."""
@@ -81,6 +84,7 @@ class IntentClassifier:
             intent, confidence = self._intent_from_transcript(transcript, raw_confidence)
             if transcript:
                 self._last_transcript = transcript
+                self._last_transcript_time = time.monotonic()
         elif event.event_type == "context.tagged":
             intent, confidence = self._intent_from_context()
         elif event.event_type == "emotion.detected":
@@ -112,7 +116,7 @@ class IntentClassifier:
 
         tokens = set(self._TOKEN_PATTERN.findall(transcript))
         if not tokens:
-            return "assist", max(0.35, raw_confidence)
+            return "assist", max(0.55, raw_confidence)
 
         best_intent = "assist"
         best_score = 0.0
@@ -123,19 +127,24 @@ class IntentClassifier:
                 best_intent = intent
 
         if best_score <= 0.0:
-            return "assist", max(0.4, raw_confidence)
+            return "assist", max(0.55, raw_confidence)
 
         confidence = min(0.35 + best_score * 0.15, 0.9)
         confidence = max(confidence, raw_confidence)
+        confidence = max(confidence, 0.55)
         return best_intent, confidence
 
     def _intent_from_context(self) -> tuple[str, float]:
+        if self._recent_transcript():
+            return "idle", 0.3
+        if "speech_detected" in self._context_tags:
+            return "idle", 0.3
         if "high_load" in self._context_tags:
-            return "performance_check", 0.65
+            return "performance_check", 0.45
         if "low_memory" in self._context_tags:
-            return "performance_check", 0.6
+            return "performance_check", 0.45
         if "active_input" in self._context_tags:
-            return "do_not_disturb", 0.6
+            return "do_not_disturb", 0.45
         if "idle_input" in self._context_tags and self._last_transcript:
             return "summary", 0.45
         return "idle", 0.3
@@ -146,3 +155,8 @@ class IntentClassifier:
         if self._last_emotion in {"excited", "curious"}:
             return "assist", 0.5
         return "idle", 0.3
+
+    def _recent_transcript(self) -> bool:
+        if not self._last_transcript_time:
+            return False
+        return time.monotonic() - self._last_transcript_time < self._recent_transcript_window
