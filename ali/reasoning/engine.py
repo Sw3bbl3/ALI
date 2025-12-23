@@ -69,7 +69,7 @@ class ReasoningEngine:
         cooldown_ready = self._cooldown_ready()
         action: tuple[str, dict] | None = None
         if decision.should_act and decision.plan and cooldown_ready:
-            action = self._select_action(decision.plan, event)
+            action = await self._select_action(decision.plan, event)
 
         self._logger.info("Decision: should_act=%s plan=%s", decision.should_act, decision.plan)
         await self._emit_reasoning_trace(decision, plan, event, action, cooldown_ready)
@@ -133,7 +133,7 @@ class ReasoningEngine:
     def _mark_action(self) -> None:
         self._last_action_time = time.monotonic()
 
-    def _select_action(self, plan: Plan, event: Event) -> tuple[str, dict]:
+    async def _select_action(self, plan: Plan, event: Event) -> tuple[str, dict]:
         memory_summary = self._memory.summarize()
         context = TextContext(
             goal=plan.goal,
@@ -144,10 +144,10 @@ class ReasoningEngine:
             context_tags=event.payload.get("context_tags", []),
         )
         if context.transcript:
-            speech = self._text_generator.speech(context)
+            speech = await self._text_generator.speech_async(context)
             return "speak", {"text": speech, "source_event": event.event_id}
 
-        message = self._text_generator.notification(context)
+        message = await self._text_generator.notification_async(context)
         if "focus" in plan.goal.lower():
             return "notify", {"title": "ALI Focus Plan", "message": message, "source_event": event.event_id}
         if "wellbeing" in plan.goal.lower():
