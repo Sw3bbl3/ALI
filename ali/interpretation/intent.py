@@ -18,7 +18,39 @@ class IntentClassifier:
     """
 
     _TOKEN_PATTERN = re.compile(r"[a-z']+")
+    _GREETINGS = {"hi", "hello", "hey"}
+    _CONVERSE_PHRASES = {
+        "how are you",
+        "how's it going",
+        "hows it going",
+        "what's up",
+        "whats up",
+        "say something",
+    }
+    _COMMAND_VERBS = {"open", "run", "show", "do", "execute", "start", "launch"}
     _INTENT_KEYWORDS: dict[str, dict[str, float]] = {
+        "greet": {
+            "hello": 1.2,
+            "hi": 1.1,
+            "hey": 1.0,
+        },
+        "converse": {
+            "chat": 0.8,
+            "talk": 0.8,
+            "how": 0.7,
+            "what": 0.5,
+            "up": 0.4,
+        },
+        "command": {
+            "open": 1.0,
+            "run": 1.0,
+            "show": 0.9,
+            "do": 0.8,
+            "execute": 1.0,
+            "start": 0.9,
+            "launch": 0.9,
+            "help": 0.7,
+        },
         "status_check": {
             "status": 1.2,
             "health": 1.0,
@@ -52,12 +84,6 @@ class IntentClassifier:
             "digest": 0.9,
             "brief": 0.8,
         },
-        "assist": {
-            "help": 0.7,
-            "assist": 0.7,
-            "question": 0.6,
-            "can": 0.4,
-        },
     }
 
     def __init__(self, event_bus: EventBus) -> None:
@@ -66,10 +92,11 @@ class IntentClassifier:
         self._context_tags: set[str] = set()
         self._last_emotion: str = "neutral"
         self._last_transcript: str = ""
-        self._last_transcript_time: float = 0.0
-        self._recent_transcript_window = 60.0
-        self._sticky_intent: str | None = None
-        self._silence_timeout_seconds = float(os.getenv("ALI_ASSIST_SILENCE_TIMEOUT", "20"))
+        self._conversation_duration_seconds = 20.0
+        self._conversation_active = False
+        self._conversation_expires_at = 0.0
+        self._current_intent = "idle"
+        self._current_confidence = 0.3
         tick_ms = float(os.getenv("ALI_INTENT_TICK_MS", "1"))
         self._queue = PrioritizedQueue(
             self._process_event,
@@ -91,47 +118,53 @@ class IntentClassifier:
 
     async def _process_event(self, event: Event) -> None:
         """Process an event and update intent state."""
+        now = time.monotonic()
         if event.event_type == "context.tagged":
             self._context_tags = set(event.payload.get("tags", []))
         if event.event_type == "emotion.detected":
             self._last_emotion = event.payload.get("emotion", "neutral")
-        if event.event_type == "action.completed":
-            self._sticky_intent = None
 
         transcript = ""
-        intent = "idle"
-        confidence = 0.3
-        clear_sticky = False
+        intent = self._current_intent
+        confidence = self._current_confidence
+        reason = "retain"
+        is_user_input = self._is_user_input(event)
 
         if event.event_type == "speech.transcript":
             transcript = event.payload.get("transcript", "")
-            raw_confidence = float(event.payload.get("confidence", 0.3))
-            intent, confidence = self._intent_from_transcript(transcript, raw_confidence)
-            if transcript:
-                self._last_transcript = transcript
-                self._last_transcript_time = time.monotonic()
             if transcript.strip().lower() == "silence":
-                clear_sticky = True
-        elif event.event_type == "context.tagged":
-            intent, confidence = self._intent_from_context()
-            if "idle_input" in self._context_tags and self._silence_timeout_elapsed():
-                clear_sticky = True
-        elif event.event_type == "emotion.detected":
-            intent, confidence = self._intent_from_emotion()
+                is_user_input = False
+            raw_confidence = float(event.payload.get("confidence", 0.3))
+            if is_user_input:
+                intent, confidence = self._intent_from_transcript(transcript, raw_confidence)
+                self._last_transcript = transcript
+                reason = "user_input"
+            else:
+                intent, confidence, reason = self._intent_from_telemetry(now)
+        elif event.event_type in {"context.tagged", "emotion.detected"}:
+            intent, confidence, reason = self._intent_from_telemetry(now)
 
-        if "speech_detected" in self._context_tags and intent == "idle":
-            intent = "assist"
-            confidence = max(confidence, 0.6)
+        if is_user_input:
+            if intent in {"greet", "converse"}:
+                if not self._conversation_active:
+                    self._logger.debug("Entering conversation_mode")
+                self._conversation_active = True
+                self._conversation_expires_at = now + self._conversation_duration_seconds
+            elif self._conversation_active:
+                self._logger.debug("Exiting conversation_mode due to user intent change")
+                self._conversation_active = False
+                self._conversation_expires_at = 0.0
 
-        if clear_sticky:
-            self._sticky_intent = None
+        if intent != self._current_intent:
+            self._logger.debug(
+                "Intent transition %s -> %s (reason=%s)",
+                self._current_intent,
+                intent,
+                reason,
+            )
 
-        if intent == "assist":
-            self._sticky_intent = "assist"
-
-        if intent == "idle" and self._sticky_intent == "assist":
-            intent = "assist"
-            confidence = max(confidence, 0.55)
+        self._current_intent = intent
+        self._current_confidence = confidence
 
         interpreted = Event(
             event_type="intent.updated",
@@ -159,11 +192,22 @@ class IntentClassifier:
         if not transcript or transcript == "silence":
             return "idle", max(0.2, raw_confidence)
 
-        tokens = set(self._TOKEN_PATTERN.findall(transcript))
+        token_list = self._TOKEN_PATTERN.findall(transcript)
+        tokens = set(token_list)
         if not tokens:
-            return "assist", max(0.55, raw_confidence)
+            return "converse", max(0.5, raw_confidence)
 
-        best_intent = "assist"
+        if any(phrase in transcript for phrase in self._CONVERSE_PHRASES):
+            return "converse", max(0.6, raw_confidence)
+        if token_list and token_list[0] in self._GREETINGS and len(token_list) <= 3:
+            return "greet", max(0.7, raw_confidence)
+        if token_list and (
+            token_list[0] in self._COMMAND_VERBS
+            or (len(token_list) > 1 and token_list[0] == "please" and token_list[1] in self._COMMAND_VERBS)
+        ):
+            return "command", max(0.65, raw_confidence)
+
+        best_intent = "converse"
         best_score = 0.0
         for intent, keywords in self._INTENT_KEYWORDS.items():
             score = sum(weight for token, weight in keywords.items() if token in tokens)
@@ -172,41 +216,23 @@ class IntentClassifier:
                 best_intent = intent
 
         if best_score <= 0.0:
-            return "assist", max(0.55, raw_confidence)
+            if self._COMMAND_VERBS.intersection(tokens):
+                return "command", max(0.6, raw_confidence)
+            return "converse", max(0.5, raw_confidence)
 
         confidence = min(0.35 + best_score * 0.15, 0.9)
         confidence = max(confidence, raw_confidence)
         confidence = max(confidence, 0.55)
         return best_intent, confidence
 
-    def _intent_from_context(self) -> tuple[str, float]:
-        if self._recent_transcript():
-            return "idle", 0.3
-        if "speech_detected" in self._context_tags:
-            return "idle", 0.3
-        if "high_load" in self._context_tags:
-            return "performance_check", 0.45
-        if "low_memory" in self._context_tags:
-            return "performance_check", 0.45
-        if "active_input" in self._context_tags:
-            return "do_not_disturb", 0.45
-        if "idle_input" in self._context_tags and self._last_transcript:
-            return "summary", 0.45
-        return "idle", 0.3
-
-    def _intent_from_emotion(self) -> tuple[str, float]:
-        if self._last_emotion in {"tired", "calm"}:
-            return "wellbeing", 0.55
-        if self._last_emotion in {"excited", "curious"}:
-            return "assist", 0.5
-        return "idle", 0.3
-
-    def _recent_transcript(self) -> bool:
-        if not self._last_transcript_time:
-            return False
-        return time.monotonic() - self._last_transcript_time < self._recent_transcript_window
-
-    def _silence_timeout_elapsed(self) -> bool:
-        if not self._last_transcript_time:
-            return False
-        return time.monotonic() - self._last_transcript_time > self._silence_timeout_seconds
+    def _intent_from_telemetry(self, now: float) -> tuple[str, float, str]:
+        if self._conversation_active:
+            if now >= self._conversation_expires_at:
+                self._logger.debug("Exiting conversation_mode after timeout")
+                self._conversation_active = False
+                self._conversation_expires_at = 0.0
+                return "idle", 0.3, "conversation_timeout"
+            return self._current_intent, self._current_confidence, "conversation_hold"
+        if self._current_intent != "idle":
+            return self._current_intent, self._current_confidence, "telemetry_hold"
+        return "idle", 0.3, "telemetry_idle"

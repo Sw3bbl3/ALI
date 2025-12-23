@@ -22,6 +22,7 @@ class IntentState:
 
     intent: str
     confidence: float
+    last_updated: float
 
 
 class ReasoningEngine:
@@ -38,34 +39,27 @@ class ReasoningEngine:
         self._cooldown_seconds = 30.0
         self._logger = logging.getLogger("ali.reasoning")
         self._text_generator = TextGenerator()
+        self._confidence_floor = 0.2
+        self._confidence_decay_per_second = 0.01
         if os.getenv("ALI_PRELOAD_TEXT_MODEL", "false").lower() in {"1", "true", "yes"}:
             self._text_generator.preload()
 
     async def handle(self, event: Event) -> None:
         """Handle interpreted events and decide on actions."""
         self._memory.add_short_term(MemoryItem(key=event.event_type, payload=event.payload))
+        now = time.monotonic()
+        self._apply_confidence_decay(now)
 
         if event.event_type == "action.completed":
             action_type = event.payload.get("action_type")
             if action_type == "speak":
-                self._intent = IntentState(intent="idle", confidence=0.0)
-                await self._event_bus.publish(
-                    Event(
-                        event_type="intent.updated",
-                        payload={
-                            "intent": "idle",
-                            "confidence": 0.0,
-                            "source_event": event.event_id,
-                        },
-                        source="reasoning.engine",
-                    )
-                )
                 return
 
         if event.event_type == "intent.updated":
             self._intent = IntentState(
                 intent=event.payload.get("intent", "idle"),
                 confidence=float(event.payload.get("confidence", 0.0)),
+                last_updated=now,
             )
 
         if not self._intent:
@@ -73,7 +67,7 @@ class ReasoningEngine:
 
         plan = None
         if self._intent.intent != "idle" and self._intent.confidence >= 0.5:
-            plan = self._planner.create_plan(goal=f"Assist with {self._intent.intent}")
+            plan = self._planner.create_plan(goal=self._goal_for_intent(self._intent.intent))
 
         risk = plan.risk if plan else 0.0
         policy_allows = True
@@ -123,7 +117,7 @@ class ReasoningEngine:
         payload = {
             "intent": self._intent.intent if self._intent else "idle",
             "confidence": round(self._intent.confidence, 3) if self._intent else 0.0,
-            "goal": plan.goal if plan else "idle",
+            "goal": plan.goal if plan else self._goal_for_intent(self._intent.intent if self._intent else "idle"),
             "plan_steps": plan_steps,
             "risk": round(plan.risk if plan else 0.0, 3),
             "should_act": decision.should_act,
@@ -179,3 +173,40 @@ class ReasoningEngine:
         if "summary" in plan.goal.lower():
             return "notify", {"title": "ALI Summary", "message": message, "source_event": event.event_id}
         return "notify", {"title": "ALI Assistance", "message": message, "source_event": event.event_id}
+
+    def _apply_confidence_decay(self, now: float) -> None:
+        if not self._intent:
+            return
+        elapsed = now - self._intent.last_updated
+        if elapsed <= 0:
+            return
+        decayed = max(
+            self._confidence_floor,
+            self._intent.confidence - (elapsed * self._confidence_decay_per_second),
+        )
+        if decayed != self._intent.confidence:
+            self._logger.debug(
+                "Intent confidence decayed from %.2f to %.2f over %.2fs",
+                self._intent.confidence,
+                decayed,
+                elapsed,
+            )
+            self._intent = IntentState(
+                intent=self._intent.intent,
+                confidence=decayed,
+                last_updated=now,
+            )
+
+    @staticmethod
+    def _goal_for_intent(intent: str) -> str:
+        mapping = {
+            "greet": "establish presence",
+            "converse": "maintain interaction",
+            "command": "execute task",
+            "idle": "monitor environment",
+            "status_check": "check system status",
+            "focus_planning": "prepare focus plan",
+            "wellbeing": "support wellbeing",
+            "summary": "deliver summary",
+        }
+        return mapping.get(intent, f"support {intent}".strip())

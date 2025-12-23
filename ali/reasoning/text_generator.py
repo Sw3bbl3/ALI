@@ -161,6 +161,10 @@ class TextGenerator:
         intent_phrase = TextGenerator._intent_phrase(context)
         if context.intent == "idle":
             return "I'm standing by if you need anything."
+        if context.intent == "greet":
+            return "Hello—I'm here and ready."
+        if context.intent == "converse":
+            return "I'm here to keep the conversation going whenever you are."
         if context.emotion and context.emotion != "neutral":
             return f"I can help with {intent_phrase}, and I hear you're feeling {context.emotion}."
         return f"I can help with {intent_phrase} whenever you're ready."
@@ -170,20 +174,28 @@ class TextGenerator:
         intent_phrase = TextGenerator._intent_phrase(context)
         if context.intent == "idle":
             return "I'm here if you need anything."
+        if context.intent == "greet":
+            return TextGenerator._greet_response()
+        if context.intent == "converse":
+            return TextGenerator._converse_response(context)
+        if context.intent == "command":
+            if context.transcript and TextGenerator._command_parse_failed(context.transcript):
+                snippet = TextGenerator._shorten_transcript(context.transcript, max_words=6)
+                return f"Got it: \"{snippet}.\" What would you like me to do?"
+            return "Understood—I’m on it."
         if context.transcript:
             snippet = TextGenerator._shorten_transcript(context.transcript, max_words=6)
-            return f"Got it: \"{snippet}.\" What would you like me to do?"
-        return f"I'm here to help with {intent_phrase}. What should we tackle first?"
+            return f"I heard: \"{snippet}.\""
+        return f"I'm here to help with {intent_phrase}."
 
     @staticmethod
     def _intent_phrase(context: TextContext) -> str:
         intent = context.intent.strip().replace("_", " ") if context.intent else ""
         if not intent or intent == "idle":
             return "anything"
-        if context.goal.lower().startswith("assist with "):
-            goal_phrase = context.goal[12:].strip()
-            if goal_phrase:
-                intent = goal_phrase
+        goal_phrase = context.goal.strip()
+        if goal_phrase and goal_phrase not in {"monitor environment", "idle"}:
+            intent = goal_phrase
         return intent
 
     @staticmethod
@@ -192,6 +204,25 @@ class TextGenerator:
         if len(words) <= max_words:
             return transcript.strip()
         return " ".join(words[:max_words]).rstrip(".,;:") + "..."
+
+    @staticmethod
+    def _greet_response() -> str:
+        return "Hi—I'm here and listening."
+
+    @staticmethod
+    def _converse_response(context: TextContext) -> str:
+        if context.emotion and context.emotion != "neutral":
+            return f"I'm here with you, and I sense you're feeling {context.emotion}."
+        return "I'm here and ready to chat."
+
+    @staticmethod
+    def _command_parse_failed(transcript: str) -> bool:
+        tokens = [token for token in transcript.strip().split() if token]
+        if not tokens:
+            return True
+        if len(tokens) == 1:
+            return True
+        return False
 
     @staticmethod
     def _prompt(context: TextContext) -> str:
