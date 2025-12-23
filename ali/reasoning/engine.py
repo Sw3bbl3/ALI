@@ -83,7 +83,7 @@ class ReasoningEngine:
             risk=risk,
             policy_allows=policy_allows,
         )
-        cooldown_ready = self._cooldown_ready()
+        cooldown_ready = self._cooldown_ready() or self._is_user_message(event)
         action: tuple[str, dict] | None = None
         if decision.should_act and decision.plan and cooldown_ready:
             action = await self._select_action(decision.plan, event)
@@ -146,6 +146,10 @@ class ReasoningEngine:
     def _cooldown_ready(self) -> bool:
         now = time.monotonic()
         return now - self._last_action_time >= self._cooldown_seconds
+
+    @staticmethod
+    def _is_user_message(event: Event) -> bool:
+        return bool(event.payload.get("transcript"))
 
     def _mark_action(self) -> None:
         self._last_action_time = time.monotonic()
