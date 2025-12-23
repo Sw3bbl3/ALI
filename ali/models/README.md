@@ -23,3 +23,8 @@ This directory holds local model artifacts used by ALI modules.
 - Favor CPU-friendly defaults and allow overrides via environment variables:
   - `ALI_MODEL_PATH`
   - `ALI_MODEL_CACHE`
+
+## Default Model
+
+- `google/gemma-3-270m` is used as the default local text model.
+- Download it with `python scripts/install_ali.py`.
