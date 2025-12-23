@@ -120,3 +120,9 @@ class EventBus:
             "last_publish_time": self._last_publish_time,
             "history_size": len(self._history),
         }
+
+    def recent_events(self, limit: int = 5) -> List[Event]:
+        """Return the most recent events for context."""
+        if limit <= 0:
+            return []
+        return list(self._history)[-limit:]
