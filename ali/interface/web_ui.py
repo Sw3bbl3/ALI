@@ -29,7 +29,7 @@ HTML_PAGE = """<!doctype html>
       }
       main {
         display: grid;
-        grid-template-columns: 1.2fr 1fr;
+        grid-template-columns: 1.1fr 1fr;
         gap: 16px;
         padding: 16px 24px;
       }
@@ -45,28 +45,15 @@ HTML_PAGE = """<!doctype html>
         font-size: 16px;
         color: #c5d0f0;
       }
-      .events {
-        max-height: 520px;
-        overflow: auto;
-        font-size: 13px;
-      }
-      .event {
-        border-bottom: 1px solid #1d2845;
-        padding: 10px 0;
-      }
-      .event-type {
-        font-weight: 600;
-        color: #9ad5ff;
-      }
-      .event-meta {
-        color: #94a1c3;
-        font-size: 12px;
-      }
       .payload {
         white-space: pre-wrap;
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
         color: #d7def7;
         margin-top: 6px;
+      }
+      .event-meta {
+        color: #94a1c3;
+        font-size: 12px;
       }
       .input-row {
         display: flex;
@@ -93,17 +80,17 @@ HTML_PAGE = """<!doctype html>
         opacity: 0.5;
         cursor: not-allowed;
       }
-      .reasoning-card {
+      .panel-card {
         border: 1px solid #2b3a66;
         border-radius: 10px;
         padding: 12px;
         margin-bottom: 12px;
         background: #0f1730;
       }
-      .reasoning-card h3 {
+      .panel-card h3 {
         margin: 0 0 8px 0;
         font-size: 14px;
-        color: #f7c948;
+        color: #9ad5ff;
       }
       .tag {
         display: inline-block;
@@ -114,12 +101,28 @@ HTML_PAGE = """<!doctype html>
         font-size: 11px;
         margin-right: 6px;
       }
+      .intent-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .intent-grid div {
+        font-size: 12px;
+        color: #cbd5f5;
+      }
+      .intent-grid strong {
+        color: #f7c948;
+        font-weight: 600;
+      }
+      .response-card h3 {
+        color: #7ae7c7;
+      }
     </style>
   </head>
   <body>
     <header>
       <h1>ALI Live Console</h1>
-      <p>Send messages while ALI continues its background events.</p>
+      <p>Send messages while tracking real-time intent and responses.</p>
     </header>
     <main>
       <section>
@@ -129,71 +132,76 @@ HTML_PAGE = """<!doctype html>
           <button id="sendButton">Send</button>
         </div>
         <p id="statusLine"></p>
-        <h2>Recent events</h2>
-        <div class="events" id="eventStream"></div>
+        <h2>Live intent</h2>
+        <div class="panel-card" id="intentCard">
+          <h3 id="intentTitle">Waiting for intent...</h3>
+          <div class="intent-grid">
+            <div>Intent: <strong id="intentValue">idle</strong></div>
+            <div>Confidence: <strong id="intentConfidence">0.00</strong></div>
+            <div>Emotion: <strong id="intentEmotion">neutral</strong></div>
+            <div>Updated: <strong id="intentUpdated">--</strong></div>
+          </div>
+          <div class="payload" id="intentDetails"></div>
+        </div>
       </section>
       <section>
-        <h2>Reasoning trace</h2>
-        <div id="reasoningStream"></div>
+        <h2>ALI responses</h2>
+        <div id="responseStream"></div>
       </section>
     </main>
     <script>
       const statusLine = document.getElementById("statusLine");
-      const eventStream = document.getElementById("eventStream");
-      const reasoningStream = document.getElementById("reasoningStream");
+      const responseStream = document.getElementById("responseStream");
       const messageInput = document.getElementById("messageInput");
       const sendButton = document.getElementById("sendButton");
+      const intentTitle = document.getElementById("intentTitle");
+      const intentValue = document.getElementById("intentValue");
+      const intentConfidence = document.getElementById("intentConfidence");
+      const intentEmotion = document.getElementById("intentEmotion");
+      const intentUpdated = document.getElementById("intentUpdated");
+      const intentDetails = document.getElementById("intentDetails");
 
       function prettyJson(obj) {
         return JSON.stringify(obj, null, 2);
       }
 
-      function addEvent(event) {
-        const item = document.createElement("div");
-        item.className = "event";
-        item.innerHTML = `
-          <div class="event-type">${event.event_type}</div>
-          <div class="event-meta">source: ${event.source} • ${event.created_at}</div>
-          <div class="payload">${prettyJson(event.payload)}</div>
-        `;
-        eventStream.prepend(item);
-        if (eventStream.children.length > 80) {
-          eventStream.removeChild(eventStream.lastChild);
-        }
+      function updateIntent(event) {
+        intentTitle.textContent = event.payload.transcript
+          ? `Heard: "${event.payload.transcript}"`
+          : "Live intent update";
+        intentValue.textContent = event.payload.intent || "idle";
+        intentConfidence.textContent = Number(event.payload.confidence || 0).toFixed(2);
+        intentEmotion.textContent = event.payload.emotion || "neutral";
+        intentUpdated.textContent = event.created_at || "--";
+        intentDetails.textContent = prettyJson({
+          context_tags: event.payload.context_tags || [],
+          source_event: event.payload.source_event,
+        });
       }
 
-      function addReasoning(event) {
+      function addResponse(event) {
         const item = document.createElement("div");
-        item.className = "reasoning-card";
-        const planSteps = (event.payload.plan_steps || []).map(step => `• ${step.action}: ${step.detail}`).join("\\n");
+        item.className = "panel-card response-card";
+        const title = event.payload.title ? ` - ${event.payload.title}` : "";
         item.innerHTML = `
-          <h3>${event.payload.goal || "Reasoning update"}</h3>
-          <div>
-            <span class="tag">intent: ${event.payload.intent}</span>
-            <span class="tag">confidence: ${event.payload.confidence}</span>
-            <span class="tag">risk: ${event.payload.risk}</span>
-            <span class="tag">should_act: ${event.payload.should_act}</span>
-          </div>
-          <div class="payload">${prettyJson({
-            memory_summary: event.payload.memory_summary,
-            plan_steps: planSteps ? planSteps.split("\\n") : [],
-            action: event.payload.action_type,
-            action_payload: event.payload.action_payload,
-          })}</div>
+          <h3>${event.payload.response_type || "response"}${title}</h3>
+          <div class="event-meta">source: ${event.source} • ${event.created_at}</div>
+          <div class="payload">${event.payload.message || event.payload.text || ""}</div>
         `;
-        reasoningStream.prepend(item);
-        if (reasoningStream.children.length > 40) {
-          reasoningStream.removeChild(reasoningStream.lastChild);
+        responseStream.prepend(item);
+        if (responseStream.children.length > 20) {
+          responseStream.removeChild(responseStream.lastChild);
         }
       }
 
       const source = new EventSource("/api/events");
       source.onmessage = (message) => {
         const event = JSON.parse(message.data);
-        if (event.event_type === "reasoning.trace") {
-          addReasoning(event);
-        } else {
-          addEvent(event);
+        if (event.event_type === "intent.updated") {
+          updateIntent(event);
+        }
+        if (event.event_type === "ali.response") {
+          addResponse(event);
         }
       };
       source.onerror = () => {
@@ -253,6 +261,7 @@ class WebUiServer:
             self._port_is_fixed = True
         self._server: asyncio.AbstractServer | None = None
         self._subscribers: set[asyncio.Queue[Dict[str, Any]]] = set()
+        self._ui_event_types = {"intent.updated", "ali.response"}
 
     async def run(self) -> None:
         """Start the web UI server and keep it running."""
@@ -285,6 +294,8 @@ class WebUiServer:
             raise last_error
 
     async def _handle_event(self, event: Event) -> None:
+        if event.event_type not in self._ui_event_types:
+            return
         payload = {
             "event_type": event.event_type,
             "source": event.source,
@@ -365,7 +376,7 @@ class WebUiServer:
         )
         writer.write(headers.encode())
         await writer.drain()
-        queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(maxsize=50)
+        queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(maxsize=20)
         self._subscribers.add(queue)
         try:
             while True:
