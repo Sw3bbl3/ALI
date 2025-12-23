@@ -45,6 +45,23 @@ class ReasoningEngine:
         """Handle interpreted events and decide on actions."""
         self._memory.add_short_term(MemoryItem(key=event.event_type, payload=event.payload))
 
+        if event.event_type == "action.completed":
+            action_type = event.payload.get("action_type")
+            if action_type == "speak":
+                self._intent = IntentState(intent="idle", confidence=0.0)
+                await self._event_bus.publish(
+                    Event(
+                        event_type="intent.updated",
+                        payload={
+                            "intent": "idle",
+                            "confidence": 0.0,
+                            "source_event": event.event_id,
+                        },
+                        source="reasoning.engine",
+                    )
+                )
+                return
+
         if event.event_type == "intent.updated":
             self._intent = IntentState(
                 intent=event.payload.get("intent", "idle"),
