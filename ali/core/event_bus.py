@@ -42,15 +42,28 @@ class EventBus:
         max_history: int = 500,
         max_in_flight: int = 50,
         backpressure_timeout: float = 0.25,
+        handler_timeout: float = 2.0,
+        worker_count: int = 4,
+        queue_maxsize: int = 500,
     ) -> None:
         self._subscribers: Dict[str, List[EventHandler]] = {}
         self._lock = asyncio.Lock()
         self._history: Deque[Event] = deque(maxlen=max_history)
         self._in_flight = asyncio.Semaphore(max_in_flight)
         self._backpressure_timeout = backpressure_timeout
+        self._handler_timeout = handler_timeout
+        self._queue: asyncio.Queue[tuple[EventHandler, Event, float]] = asyncio.Queue(
+            maxsize=queue_maxsize
+        )
+        self._worker_count = max(1, worker_count)
+        self._worker_tasks: List[asyncio.Task[None]] = []
         self._published_count = 0
         self._dropped_count = 0
         self._error_count = 0
+        self._timeout_count = 0
+        self._handler_timeouts: Dict[str, int] = {}
+        self._handler_errors: Dict[str, int] = {}
+        self._handler_lag: Dict[str, float] = {}
         self._last_publish_latency = 0.0
         self._last_publish_time = 0.0
         self._logger = logging.getLogger("ali.event_bus")
@@ -72,24 +85,79 @@ class EventBus:
             return
 
         start = time.monotonic()
-        await asyncio.gather(*(self._invoke_handler(handler, event) for handler in handlers))
+        self._ensure_workers()
+        await asyncio.gather(
+            *(self._enqueue_handler(handler, event, start) for handler in handlers)
+        )
         self._last_publish_latency = time.monotonic() - start
         self._last_publish_time = time.time()
 
-    async def _invoke_handler(self, handler: EventHandler, event: Event) -> None:
+    def _ensure_workers(self) -> None:
+        if self._worker_tasks:
+            return
+        loop = asyncio.get_running_loop()
+        self._worker_tasks = [
+            loop.create_task(self._worker_loop(), name=f"event-bus-worker-{index}")
+            for index in range(self._worker_count)
+        ]
+
+    async def _enqueue_handler(
+        self, handler: EventHandler, event: Event, start_time: float
+    ) -> None:
         try:
-            await asyncio.wait_for(self._in_flight.acquire(), timeout=self._backpressure_timeout)
+            await asyncio.wait_for(
+                self._queue.put((handler, event, start_time)),
+                timeout=self._backpressure_timeout,
+            )
+        except asyncio.TimeoutError:
+            self._dropped_count += 1
+            self._logger.warning("Dropped event %s due to backpressure", event.event_id)
+            return
+
+    async def _worker_loop(self) -> None:
+        while True:
+            handler, event, enqueued_at = await self._queue.get()
+            handler_key = self._handler_key(handler)
+            lag = time.monotonic() - enqueued_at
+            self._handler_lag[handler_key] = lag
+            try:
+                await self._invoke_handler(handler, event, handler_key)
+            finally:
+                self._queue.task_done()
+
+    async def _invoke_handler(
+        self, handler: EventHandler, event: Event, handler_key: str
+    ) -> None:
+        try:
+            await asyncio.wait_for(
+                self._in_flight.acquire(), timeout=self._backpressure_timeout
+            )
         except asyncio.TimeoutError:
             self._dropped_count += 1
             self._logger.warning("Dropped event %s due to backpressure", event.event_id)
             return
         try:
-            await handler(event)
+            await asyncio.wait_for(handler(event), timeout=self._handler_timeout)
+        except asyncio.TimeoutError:
+            self._timeout_count += 1
+            self._handler_timeouts[handler_key] = (
+                self._handler_timeouts.get(handler_key, 0) + 1
+            )
+            self._logger.warning(
+                "Handler timeout for event %s after %.2fs",
+                event.event_id,
+                self._handler_timeout,
+            )
         except Exception:  # pragma: no cover - defensive logging
             self._error_count += 1
+            self._handler_errors[handler_key] = self._handler_errors.get(handler_key, 0) + 1
             self._logger.exception("Handler error for event %s", event.event_id)
         finally:
             self._in_flight.release()
+
+    @staticmethod
+    def _handler_key(handler: EventHandler) -> str:
+        return f"{handler.__module__}.{handler.__qualname__}"
 
     async def replay(
         self,
@@ -116,9 +184,14 @@ class EventBus:
             "published": self._published_count,
             "dropped": self._dropped_count,
             "errors": self._error_count,
+            "timeouts": self._timeout_count,
             "last_publish_latency": round(self._last_publish_latency, 4),
             "last_publish_time": self._last_publish_time,
             "history_size": len(self._history),
+            "queue_depth": self._queue.qsize(),
+            "handler_lag": {key: round(value, 4) for key, value in self._handler_lag.items()},
+            "handler_timeouts": dict(self._handler_timeouts),
+            "handler_errors": dict(self._handler_errors),
         }
 
     def recent_events(self, limit: int = 5) -> List[Event]:
