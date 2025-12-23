@@ -79,6 +79,7 @@ class Orchestrator:
         await self.event_bus.subscribe("context.tagged", intent.handle)
         await self.event_bus.subscribe("emotion.detected", intent.handle)
         await self.event_bus.subscribe("action.completed", intent.handle)
+        await self.event_bus.subscribe("action.completed", self._reasoning_engine.handle)
         await self.event_bus.subscribe("intent.updated", self._reasoning_engine.handle)
         await self.event_bus.subscribe("action.requested", self._action_coordinator.handle)
         self.scheduler.schedule(intent.run, name="IntentClassifier", priority=5)
