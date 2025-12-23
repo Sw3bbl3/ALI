@@ -94,3 +94,37 @@ class GemmaLocalModel:
         cache_dir = Path(os.getenv("ALI_MODEL_CACHE", "ali/models/cache"))
         device = os.getenv("ALI_MODEL_DEVICE")
         return GemmaConfig(model_id=model_id, cache_dir=cache_dir, device=device)
+
+
+def ensure_gemma_model_cached(
+    *,
+    model_id: Optional[str] = None,
+    cache_dir: Optional[Path] = None,
+    force: bool = False,
+) -> bool:
+    """Download the Gemma model snapshot if it is not cached yet."""
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError:
+        logger.warning(
+            "huggingface_hub is not installed; skipping Gemma model download."
+        )
+        return False
+
+    config = GemmaLocalModel._config_from_env()
+    resolved_model_id = model_id or config.model_id
+    resolved_cache_dir = cache_dir or config.cache_dir
+    resolved_cache_dir.mkdir(parents=True, exist_ok=True)
+    local_dir = resolved_cache_dir / resolved_model_id.replace("/", "__")
+    try:
+        snapshot_download(
+            repo_id=resolved_model_id,
+            cache_dir=str(resolved_cache_dir),
+            local_dir=str(local_dir),
+            local_dir_use_symlinks=False,
+            resume_download=not force,
+        )
+    except Exception as exc:
+        logger.warning("Unable to download Gemma model %s: %s", resolved_model_id, exc)
+        return False
+    return True
