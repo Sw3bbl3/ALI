@@ -30,6 +30,21 @@ class TextGenerator:
     def __init__(self) -> None:
         self._use_model = os.getenv("ALI_TEXT_MODEL", "gemma").lower() == "gemma"
         self._model: GemmaLocalModel | None = None
+        self._preloaded = False
+
+    def preload(self) -> bool:
+        """Warm the text model if enabled."""
+        if not self._use_model or self._preloaded:
+            return False
+        try:
+            if not self._model:
+                self._model = GemmaLocalModel()
+            warmed = self._model.warm()
+            self._preloaded = warmed
+            return warmed
+        except Exception as exc:  # noqa: BLE001 - keep startup resilient
+            logger.warning("Failed to preload text model: %s", exc)
+            return False
 
     def notification(self, context: TextContext) -> str:
         """Craft a notification message."""

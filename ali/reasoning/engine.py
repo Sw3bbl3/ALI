@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -37,6 +38,8 @@ class ReasoningEngine:
         self._cooldown_seconds = 30.0
         self._logger = logging.getLogger("ali.reasoning")
         self._text_generator = TextGenerator()
+        if os.getenv("ALI_PRELOAD_TEXT_MODEL", "false").lower() in {"1", "true", "yes"}:
+            self._text_generator.preload()
 
     async def handle(self, event: Event) -> None:
         """Handle interpreted events and decide on actions."""
@@ -63,17 +66,23 @@ class ReasoningEngine:
             risk=risk,
             policy_allows=policy_allows,
         )
-        self._logger.info("Decision: should_act=%s plan=%s", decision.should_act, decision.plan)
-        await self._emit_reasoning_trace(decision, plan, event)
+        cooldown_ready = self._cooldown_ready()
+        action: tuple[str, dict] | None = None
+        if decision.should_act and decision.plan and cooldown_ready:
+            action = self._select_action(decision.plan, event)
 
-        if decision.should_act and decision.plan and self._ready_for_action():
-            action_type, payload = self._select_action(decision.plan, event)
+        self._logger.info("Decision: should_act=%s plan=%s", decision.should_act, decision.plan)
+        await self._emit_reasoning_trace(decision, plan, event, action, cooldown_ready)
+
+        if action:
+            action_type, payload = action
             request = ActionRequest(
                 action_type=action_type,
                 payload=payload | {"risk": risk},
                 source="reasoning.engine",
             )
             if self._permission_gate.approve(request):
+                self._mark_action()
                 action_event = Event(
                     event_type="action.requested",
                     payload={
@@ -85,7 +94,14 @@ class ReasoningEngine:
                 )
                 await self._event_bus.publish(action_event)
 
-    async def _emit_reasoning_trace(self, decision: Decision, plan: Plan | None, event: Event) -> None:
+    async def _emit_reasoning_trace(
+        self,
+        decision: Decision,
+        plan: Plan | None,
+        event: Event,
+        action: tuple[str, dict] | None,
+        cooldown_ready: bool,
+    ) -> None:
         plan_steps = plan.steps if plan else []
         payload = {
             "intent": self._intent.intent if self._intent else "idle",
@@ -94,11 +110,12 @@ class ReasoningEngine:
             "plan_steps": plan_steps,
             "risk": round(plan.risk if plan else 0.0, 3),
             "should_act": decision.should_act,
+            "cooldown_ready": cooldown_ready,
             "memory_summary": self._memory.summarize(),
             "source_event": event.event_id,
         }
-        if decision.should_act and decision.plan:
-            action_type, action_payload = self._select_action(decision.plan, event)
+        if action:
+            action_type, action_payload = action
             payload["action_type"] = action_type
             payload["action_payload"] = action_payload
         await self._event_bus.publish(
@@ -109,12 +126,12 @@ class ReasoningEngine:
             )
         )
 
-    def _ready_for_action(self) -> bool:
+    def _cooldown_ready(self) -> bool:
         now = time.monotonic()
-        if now - self._last_action_time < self._cooldown_seconds:
-            return False
-        self._last_action_time = now
-        return True
+        return now - self._last_action_time >= self._cooldown_seconds
+
+    def _mark_action(self) -> None:
+        self._last_action_time = time.monotonic()
 
     def _select_action(self, plan: Plan, event: Event) -> tuple[str, dict]:
         memory_summary = self._memory.summarize()
