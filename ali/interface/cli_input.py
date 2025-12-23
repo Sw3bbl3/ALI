@@ -48,6 +48,8 @@ class CliInputMonitor:
         self._model = GemmaLocalModel()
         self._enable_tool_calls = os.getenv("ALI_ENABLE_TOOL_CALLS", "").lower() in {"1", "true", "yes"}
         self._show_tool_calls = os.getenv("ALI_SHOW_TOOL_CALLS", "").lower() in {"1", "true", "yes"}
+        self._response_tasks: set[asyncio.Task] = set()
+        self._output_lock = asyncio.Lock()
 
     async def run(self) -> None:
         """Continuously read CLI input and publish events."""
@@ -64,16 +66,9 @@ class CliInputMonitor:
                 return
 
             await self._publish_transcript(message)
-            response = self._generate_response(message)
-            if response:
-                content, tool_lines = self._split_response(response)
-                if content:
-                    print(f"ALI> {content}")
-                if tool_lines and self._show_tool_calls:
-                    for line in tool_lines:
-                        print(f"ALI(tool)> {line}")
-                if tool_lines and self._enable_tool_calls:
-                    await self._handle_tool_calls(tool_lines)
+            task = asyncio.create_task(self._respond_to_message(message))
+            self._response_tasks.add(task)
+            task.add_done_callback(self._response_tasks.discard)
 
     async def _read_input(self) -> str | None:
         try:
@@ -108,6 +103,20 @@ class CliInputMonitor:
         except Exception as exc:  # noqa: BLE001 - fallback to avoid breaking CLI
             self._logger.warning("Model unavailable, skipping response: %s", exc)
             return None
+
+    async def _respond_to_message(self, message: str) -> None:
+        response = await asyncio.to_thread(self._generate_response, message)
+        if not response:
+            return
+        content, tool_lines = self._split_response(response)
+        async with self._output_lock:
+            if content:
+                print(f"ALI> {content}", flush=True)
+            if tool_lines and self._show_tool_calls:
+                for line in tool_lines:
+                    print(f"ALI(tool)> {line}", flush=True)
+        if tool_lines and self._enable_tool_calls:
+            await self._handle_tool_calls(tool_lines)
 
     @staticmethod
     def _split_response(response: str) -> tuple[str, list[str]]:

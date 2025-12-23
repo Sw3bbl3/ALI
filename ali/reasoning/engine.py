@@ -9,7 +9,7 @@ from typing import Optional
 
 from ali.core.event_bus import Event, EventBus
 from ali.core.permissions import ActionRequest, PermissionGate
-from ali.reasoning.decision import DecisionEngine
+from ali.reasoning.decision import Decision, DecisionEngine
 from ali.reasoning.memory import MemoryItem, MemoryStore
 from ali.reasoning.planner import Plan, Planner
 from ali.reasoning.text_generator import TextContext, TextGenerator
@@ -64,6 +64,7 @@ class ReasoningEngine:
             policy_allows=policy_allows,
         )
         self._logger.info("Decision: should_act=%s plan=%s", decision.should_act, decision.plan)
+        await self._emit_reasoning_trace(decision, plan, event)
 
         if decision.should_act and decision.plan and self._ready_for_action():
             action_type, payload = self._select_action(decision.plan, event)
@@ -83,6 +84,30 @@ class ReasoningEngine:
                     source="reasoning.engine",
                 )
                 await self._event_bus.publish(action_event)
+
+    async def _emit_reasoning_trace(self, decision: Decision, plan: Plan | None, event: Event) -> None:
+        plan_steps = plan.steps if plan else []
+        payload = {
+            "intent": self._intent.intent if self._intent else "idle",
+            "confidence": round(self._intent.confidence, 3) if self._intent else 0.0,
+            "goal": plan.goal if plan else "idle",
+            "plan_steps": plan_steps,
+            "risk": round(plan.risk if plan else 0.0, 3),
+            "should_act": decision.should_act,
+            "memory_summary": self._memory.summarize(),
+            "source_event": event.event_id,
+        }
+        if decision.should_act and decision.plan:
+            action_type, action_payload = self._select_action(decision.plan, event)
+            payload["action_type"] = action_type
+            payload["action_payload"] = action_payload
+        await self._event_bus.publish(
+            Event(
+                event_type="reasoning.trace",
+                payload=payload,
+                source="reasoning.engine",
+            )
+        )
 
     def _ready_for_action(self) -> bool:
         now = time.monotonic()
