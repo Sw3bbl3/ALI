@@ -68,6 +68,8 @@ class IntentClassifier:
         self._last_transcript: str = ""
         self._last_transcript_time: float = 0.0
         self._recent_transcript_window = 60.0
+        self._sticky_intent: str | None = None
+        self._silence_timeout_seconds = float(os.getenv("ALI_ASSIST_SILENCE_TIMEOUT", "20"))
         tick_ms = float(os.getenv("ALI_INTENT_TICK_MS", "1"))
         self._queue = PrioritizedQueue(
             self._process_event,
@@ -93,10 +95,13 @@ class IntentClassifier:
             self._context_tags = set(event.payload.get("tags", []))
         if event.event_type == "emotion.detected":
             self._last_emotion = event.payload.get("emotion", "neutral")
+        if event.event_type == "action.completed":
+            self._sticky_intent = None
 
         transcript = ""
         intent = "idle"
         confidence = 0.3
+        clear_sticky = False
 
         if event.event_type == "speech.transcript":
             transcript = event.payload.get("transcript", "")
@@ -105,14 +110,28 @@ class IntentClassifier:
             if transcript:
                 self._last_transcript = transcript
                 self._last_transcript_time = time.monotonic()
+            if transcript.strip().lower() == "silence":
+                clear_sticky = True
         elif event.event_type == "context.tagged":
             intent, confidence = self._intent_from_context()
+            if "idle_input" in self._context_tags and self._silence_timeout_elapsed():
+                clear_sticky = True
         elif event.event_type == "emotion.detected":
             intent, confidence = self._intent_from_emotion()
 
         if "speech_detected" in self._context_tags and intent == "idle":
             intent = "assist"
             confidence = max(confidence, 0.6)
+
+        if clear_sticky:
+            self._sticky_intent = None
+
+        if intent == "assist":
+            self._sticky_intent = "assist"
+
+        if intent == "idle" and self._sticky_intent == "assist":
+            intent = "assist"
+            confidence = max(confidence, 0.55)
 
         interpreted = Event(
             event_type="intent.updated",
@@ -186,3 +205,8 @@ class IntentClassifier:
         if not self._last_transcript_time:
             return False
         return time.monotonic() - self._last_transcript_time < self._recent_transcript_window
+
+    def _silence_timeout_elapsed(self) -> bool:
+        if not self._last_transcript_time:
+            return False
+        return time.monotonic() - self._last_transcript_time > self._silence_timeout_seconds

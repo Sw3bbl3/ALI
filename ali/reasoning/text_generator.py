@@ -33,6 +33,7 @@ class TextGenerator:
         self._use_model = os.getenv("ALI_TEXT_MODEL", "gemma").lower() == "gemma"
         self._model: GemmaLocalModel | None = None
         self._preloaded = False
+        self._allow_lazy_load = os.getenv("ALI_TEXT_MODEL_LAZY_LOAD", "false").lower() in {"1", "true", "yes"}
 
     def preload(self) -> bool:
         """Warm the text model if enabled."""
@@ -90,19 +91,21 @@ class TextGenerator:
 
     def _generate(self, prompt: str) -> str | None:
         try:
-            if not self._model:
-                self._model = GemmaLocalModel()
-            return self._model.generate(prompt, max_new_tokens=80, temperature=0.6)
+            model = self._get_model(allow_load=self._preloaded or self._allow_lazy_load)
+            if not model:
+                return None
+            return model.generate(prompt, max_new_tokens=80, temperature=0.6)
         except Exception as exc:  # noqa: BLE001 - provide fallback
             logger.warning("Text model unavailable: %s", exc)
             return None
 
     async def _generate_async(self, prompt: str) -> str | None:
         try:
-            if not self._model:
-                self._model = GemmaLocalModel()
+            model = self._get_model(allow_load=self._preloaded or self._allow_lazy_load)
+            if not model:
+                return None
             return await asyncio.to_thread(
-                self._model.generate,
+                model.generate,
                 prompt,
                 max_new_tokens=80,
                 temperature=0.6,
@@ -110,6 +113,14 @@ class TextGenerator:
         except Exception as exc:  # noqa: BLE001 - provide fallback
             logger.warning("Text model unavailable: %s", exc)
             return None
+
+    def _get_model(self, *, allow_load: bool) -> GemmaLocalModel | None:
+        if self._model:
+            return self._model
+        if allow_load:
+            self._model = GemmaLocalModel()
+            return self._model
+        return None
 
     @staticmethod
     def _clean_generation(text: str, *, max_words: int) -> str:
