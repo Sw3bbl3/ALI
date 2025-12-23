@@ -19,6 +19,7 @@ class TextContext:
 
     goal: str
     memory_summary: Dict[str, int]
+    salient_memories: list[str]
     intent: str
     emotion: str
     transcript: str
@@ -123,6 +124,7 @@ class TextGenerator:
             "transcript:",
             "context tags:",
             "recent signals:",
+            "salient memories:",
         )
         candidate = ""
         for line in lines:
@@ -191,6 +193,7 @@ class TextGenerator:
             f"Transcript: {context.transcript}\n"
             f"Context tags: {', '.join(context.context_tags) or 'none'}\n"
             f"Recent signals: {context.memory_summary}\n"
+            f"Salient memories: {', '.join(context.salient_memories) or 'none'}\n"
             "Notification:"
         )
 
@@ -206,5 +209,6 @@ class TextGenerator:
             f"Transcript: {context.transcript}\n"
             f"Context tags: {', '.join(context.context_tags) or 'none'}\n"
             f"Recent signals: {context.memory_summary}\n"
+            f"Salient memories: {', '.join(context.salient_memories) or 'none'}\n"
             "Response:"
         )

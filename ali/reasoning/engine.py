@@ -135,9 +135,12 @@ class ReasoningEngine:
 
     async def _select_action(self, plan: Plan, event: Event) -> tuple[str, dict]:
         memory_summary = self._memory.summarize()
+        salient_items = self._memory.recall_salient(limit=3)
+        salient_memories = [self._memory.summarize_item(item) for item in salient_items]
         context = TextContext(
             goal=plan.goal,
             memory_summary=memory_summary,
+            salient_memories=salient_memories,
             intent=self._intent.intent if self._intent else "idle",
             emotion=event.payload.get("emotion", "neutral"),
             transcript=event.payload.get("transcript", ""),
