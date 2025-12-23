@@ -36,7 +36,9 @@ class TextGenerator:
         if self._use_model:
             generated = self._generate(self._prompt(context))
             if generated:
-                return generated
+                cleaned = self._clean_generation(generated, max_words=40)
+                if cleaned:
+                    return cleaned
         return (
             f"{context.goal}. Recent signals: {context.memory_summary}. "
             f"Intent={context.intent}, emotion={context.emotion}."
@@ -47,7 +49,9 @@ class TextGenerator:
         if self._use_model:
             generated = self._generate(self._speech_prompt(context))
             if generated:
-                return generated
+                cleaned = self._clean_generation(generated, max_words=30)
+                if cleaned:
+                    return cleaned
         return f"A gentle reminder from ALI about {context.intent}."
 
     def _generate(self, prompt: str) -> str | None:
@@ -58,6 +62,19 @@ class TextGenerator:
         except Exception as exc:  # noqa: BLE001 - provide fallback
             logger.warning("Text model unavailable: %s", exc)
             return None
+
+    @staticmethod
+    def _clean_generation(text: str, *, max_words: int) -> str:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return ""
+        candidate = lines[0]
+        if candidate.lower().startswith("notification:"):
+            candidate = candidate.split(":", 1)[1].strip()
+        words = candidate.split()
+        if len(words) > max_words:
+            candidate = " ".join(words[:max_words]).rstrip(".,;:") + "..."
+        return candidate
 
     @staticmethod
     def _prompt(context: TextContext) -> str:

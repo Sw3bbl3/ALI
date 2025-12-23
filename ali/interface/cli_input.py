@@ -63,8 +63,9 @@ class CliInputMonitor:
             await self._publish_transcript(message)
             response = self._generate_response(message)
             if response:
-                print(f"ALI> {response}")
-                await self._handle_tool_calls(response)
+                cleaned_response = self._clean_response(response)
+                print(f"ALI> {cleaned_response}")
+                await self._handle_tool_calls(cleaned_response)
 
     async def _read_input(self) -> str | None:
         try:
@@ -99,6 +100,15 @@ class CliInputMonitor:
         except Exception as exc:  # noqa: BLE001 - fallback to avoid breaking CLI
             self._logger.warning("Model unavailable, skipping response: %s", exc)
             return None
+
+    @staticmethod
+    def _clean_response(response: str) -> str:
+        lines = [line.rstrip() for line in response.splitlines()]
+        tool_lines = [line for line in lines if line.strip().startswith("TOOL:")]
+        content_lines = [line.strip() for line in lines if line.strip() and line not in tool_lines]
+        primary = content_lines[0] if content_lines else ""
+        cleaned = [line for line in [primary, *tool_lines] if line]
+        return "\n".join(cleaned)
 
     @staticmethod
     def _intent_hints(message: str) -> list[str]:
