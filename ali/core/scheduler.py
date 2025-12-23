@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -43,6 +44,7 @@ class Scheduler:
         power_budget: float = 10.0,
         load_threshold: float = 4.0,
         throttle_seconds: float = 0.5,
+        heartbeat_interval: float = 2.0,
     ) -> None:
         self._tasks: List[asyncio.Task] = []
         self._task_specs: List[TaskSpec] = []
@@ -51,6 +53,7 @@ class Scheduler:
         self._power_used = 0.0
         self._load_threshold = load_threshold
         self._throttle_seconds = throttle_seconds
+        self._heartbeat_interval = heartbeat_interval
         self._logger = logging.getLogger("ali.scheduler")
 
     def schedule(
@@ -117,7 +120,13 @@ class Scheduler:
             if self._should_throttle():
                 await asyncio.sleep(self._throttle_seconds)
             state.last_heartbeat = time.monotonic()
-            await spec.coro_factory()
+            heartbeat_task = asyncio.create_task(self._heartbeat_loop(state))
+            try:
+                await spec.coro_factory()
+            finally:
+                heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat_task
             break
 
     def _on_task_done(self, spec: TaskSpec, done: asyncio.Task) -> None:
@@ -146,3 +155,8 @@ class Scheduler:
         except OSError:
             return False
         return load >= self._load_threshold
+
+    async def _heartbeat_loop(self, state: TaskState) -> None:
+        while True:
+            await asyncio.sleep(self._heartbeat_interval)
+            state.last_heartbeat = time.monotonic()
